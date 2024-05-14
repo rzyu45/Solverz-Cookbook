@@ -28,6 +28,7 @@ jobs:
           cd docs
           pip install -r requirements.txt
           make html
+          cd ..
       - name: Deploy
         id: builddeploy
         uses: Azure/static-web-apps-deploy@v1
