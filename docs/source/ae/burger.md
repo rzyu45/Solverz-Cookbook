@@ -2,12 +2,12 @@
 
 # The Analytical Solution to the Inviscid Burger's Equation
 
-The inviscid burger's equation is a representative of the nonlinear hyperbolic partial differential equations (PDEs), with formula
+The inviscid burger's equation is a representative of the nonlinear hyperbolic partial differential equations (PDEs) with formula
 ```{math}
-\frac{\partial u}{\partial t}+\frac{\partial}{\partial x}\left(\frac{u^2}{2}\right)=0,
+\frac{\partial u}{\partial t}+\frac{\partial}{\partial x}\left(\frac{u^2}{2}\right)=0.
 ```
 
-initial condition
+We illustrate its solution using the initial condition
 
 $$u(x,0)=-\sin(\pi x)$$
 
