@@ -67,3 +67,9 @@ mathjax3_config = {
 
 html_theme = 'alabaster'
 html_static_path = ['_static']
+html_theme_options = {
+    "description": "A Collection of Solverz' Recipes",
+    "github_user": "rzyu45",
+    "github_repo": "Solverz-Cookbook",
+    "fixed_sidebar": True
+}

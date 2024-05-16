@@ -6,7 +6,7 @@
 Welcome to Solverz Cookbook!
 ============================================
 
-Here is a collection of Solverz examples
+Here presents a collection of modelling and numerical solution examples based on Solverz.
 
 
 Examples on Algebraic Equations

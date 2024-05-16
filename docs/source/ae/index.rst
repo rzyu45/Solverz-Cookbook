@@ -10,4 +10,4 @@ Contents
 .. toctree::
    :titlesonly:
 
-   burger.md
+   burger/burger.md
