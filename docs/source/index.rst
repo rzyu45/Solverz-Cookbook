@@ -23,7 +23,7 @@ Examples on Finite Difference Algebraic Equations
 Examples on Differential Algebraic Equations
 --------------------------------------------
 
-:ref:`Perform the Time-domain Simulation of Electric Power Systems <m3b9>`
+:ref:`Time-domain Simulation of Electric Power Systems <m3b9>`
 
 .. toctree::
    :hidden:
