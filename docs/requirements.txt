@@ -19,4 +19,4 @@ sphinxcontrib-qthelp
 sphinxcontrib-serializinghtml
 sphinx-reredirects
 chardet
-
+Solverz
