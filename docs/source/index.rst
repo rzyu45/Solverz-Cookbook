@@ -14,6 +14,7 @@ Examples on Algebraic Equations
 
 :ref:`The Analytical Solutions to the Burger's Equation <burger>`
 
+:ref:`The Jacobian Calculation of Electric Power Flow <pf>`
 
 Examples on Finite Difference Algebraic Equations
 -------------------------------------------------
@@ -24,6 +25,8 @@ Examples on Differential Algebraic Equations
 --------------------------------------------
 
 :ref:`Time-domain Simulation of Electric Power Systems <m3b9>`
+
+:ref:`Method-of-Lines Solution of Network Gas Flow <mol>`
 
 .. toctree::
    :hidden:

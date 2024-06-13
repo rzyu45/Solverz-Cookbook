@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
 
 from Solverz import Eqn, Ode, Var, Param, sin, cos, Rodas, Opt, TimeSeriesParam, made_numerical, Model
 
@@ -41,7 +42,9 @@ m.Ed_prime = Eqn(name='Ed_prime',
 m.Eq_prime = Eqn(name='Eq_prime',
                  eqn=(m.Eqp - cos(m.delta) * (m.Ux[0:3] + m.ra * m.Ixg - m.Xdp * m.Iyg)
                       - sin(m.delta) * (m.Uy[0:3] + m.ra * m.Iyg + m.Xdp * m.Ixg)))
-df = pd.read_excel('test_m3b9/test_m3b9.xlsx',
+current_dir = os.getcwd()
+file_path = os.path.join(current_dir, 'test_m3b9', 'test_m3b9.xlsx')
+df = pd.read_excel(file_path,
                    sheet_name=None,
                    engine='openpyxl',
                    header=None

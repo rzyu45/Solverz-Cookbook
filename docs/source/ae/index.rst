@@ -11,3 +11,4 @@ Contents
    :titlesonly:
 
    burger/burger.md
+   pf/pf.md
