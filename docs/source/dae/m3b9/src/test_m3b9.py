@@ -81,25 +81,34 @@ def test_m3b9(datadir):
 
     m3b9, y0 = m.create_instance()
 
-    m3b9_dae, code = made_numerical(m3b9, y0, sparse=True, output_code=True)
+    m3b9_dae_sp, code = made_numerical(m3b9, y0, sparse=True, output_code=True)
+    m3b9_dae_den, code = made_numerical(m3b9, y0, sparse=False, output_code=True)
     # %% solution
-    sol = Rodas(m3b9_dae,
-                np.linspace(0, 10, 1001),
-                y0,
-                Opt(hinit=1e-5))
+    sol_sp = Rodas(m3b9_dae_sp,
+                   np.linspace(0, 10, 1001),
+                   y0,
+                   Opt(hinit=1e-5))
+    sol_den = Rodas(m3b9_dae_den,
+                    np.linspace(0, 10, 1001),
+                    y0,
+                    Opt(hinit=1e-5))
     # %% run tests
     with open(datadir/'delta_bench.npy', 'rb') as f:
         delta_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['delta'], delta_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_sp.Y['delta'], delta_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_den.Y['delta'], delta_bench, rtol=1e-4, atol=1e-5)
 
     with open(datadir/'omega_bench.npy', 'rb') as f:
         omega_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['omega'], omega_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_sp.Y['omega'], omega_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_den.Y['omega'], omega_bench, rtol=1e-4, atol=1e-5)
 
     with open(datadir/'Ux_bench.npy', 'rb') as f:
         Ux_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['Ux'], Ux_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_sp.Y['Ux'], Ux_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_den.Y['Ux'], Ux_bench, rtol=1e-4, atol=1e-5)
 
     with open(datadir/'Uy_bench.npy', 'rb') as f:
         Uy_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['Uy'], Uy_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_sp.Y['Uy'], Uy_bench, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(sol_den.Y['Uy'], Uy_bench, rtol=1e-4, atol=1e-3)
