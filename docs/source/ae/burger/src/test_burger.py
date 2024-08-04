@@ -1,5 +1,5 @@
 import numpy as np
-from Solverz import Var, Param, Eqn, made_numerical, sin, Model, nr_method
+from Solverz import Var, Param, Eqn, made_numerical, sin, Model, nr_method, Opt
 
 import matplotlib.pyplot as plt
 
@@ -14,6 +14,7 @@ def test_burger(datadir):
     sae, y0 = m.create_instance()
     ae, code = made_numerical(sae, y0, output_code=True, sparse=True)
     # %% solution
+    opt = Opt(ite_tol=1e-8)
     X = np.linspace(-1, 1, 81)
     U = np.zeros((81, 5))
     t_range = [0.1, 0.3, 0.5, 0.7, 1]
@@ -23,16 +24,16 @@ def test_burger(datadir):
         for i in range(X.shape[0]):
             ae.p['x1'] = X[i]
             if t_range[j] < tshock:
-                sol = nr_method(ae, y0)
+                sol = nr_method(ae, y0, opt)
                 U[i, j] = -np.sin(np.pi * sol.y['x'])[0]
             else:
                 if X[i] > 0:
                     y0['x'] = 1
-                    sol = nr_method(ae, y0)
+                    sol = nr_method(ae, y0, opt)
                     U[i, j] = -np.sin(np.pi * sol.y['x'])[0]
                 elif X[i] < 0:
                     y0['x'] = -1
-                    sol = nr_method(ae, y0)
+                    sol = nr_method(ae, y0, opt)
                     U[i, j] = -np.sin(np.pi * sol.y['x'])[0]
                 else:
                     U[i, j] = 0
