@@ -14,7 +14,7 @@ Examples on Algebraic Equations
 
 :ref:`The Analytical Solutions to the Burger's Equation <burger>`
 
-:ref:`The Jacobian Calculation of Electric Power Flow <pf>`
+:ref:`The Calculation of Electric Power Flow <pf>`
 
 Examples on Finite Difference Algebraic Equations
 -------------------------------------------------

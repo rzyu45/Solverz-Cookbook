@@ -2,3 +2,5 @@
 /docs/build
 /.idea
 *.pyc
+/docs/source/ae/pf/src/powerflow
+/docs/source/ae/pf/src/powerflow_njit
