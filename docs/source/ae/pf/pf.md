@@ -33,10 +33,7 @@ We use the `case30` from the [matpower](https://matpower.org/) library. The requ
 
 We first perform the symbolic modelling of the `case30` power flow. 
 
-```{eval-rst}
-.. plot:: ae/pf/src/pf_mdl.py
-   :include-source: True
-   :show-source-link: False
+```{literalinclude} src/pf_mdl.py
 ```
 
 We use the `module_printer` to generate two independent python modules `powerflow` and `powerflow_njit` with the `jit` flag being `True` and `False` respectively. 
@@ -45,8 +42,8 @@ After *printing* the modules, we can just import these modules and call the `F` 
 
 ```python
 from powerflow import mdl as pf, y as y0
-F0 = pf.F(y0, mdl.p)
-J0 = pf.J(y0, mdl.p)
+F0 = pf.F(y0, pf.p)
+J0 = pf.J(y0, pf.p)
 ```
 
 ### Jit acceleration
@@ -55,12 +52,11 @@ The above power models have the $\sum$ symbols, which bring about burdensome for
 
 We show the computation overhead between two `jit` settings using the following figures.
 
-```{eval-rst}
-.. plot:: ae/pf/src/time_prof.py
-   :show-source-link: True
-```
+![omega](fig/time_prof.png)
 
-It is apparent that though it took hundreds of seconds to compile the module `powerflow`, the post-compiled `F` and `J` function evaluations are one magnitude faster than those without jit-compilation. 
+![omega](fig/time_prof_01.png)
+
+On a laptop equipped with Ryzen 5800H CPU, it took hundreds of seconds to compile the module `powerflow`. However, the post-compiled `F` and `J` function evaluations were one magnitude faster than those without jit-compilation. 
 
 The compiled results are cached locally, so that only one compilation is required for each model. We recommend that one debug one's models without jit and compile the models in efficiency-demanding cases.
 
@@ -69,11 +65,10 @@ The compiled results are cached locally, so that only one compilation is require
 The Newton method sometimes fails because it is not robust enough. We view this cases as having ill-conditioned initial settings. In this cases, we can use some more robust methods, such as the semi-implicit continuous Newton method (SICNM)[^sicnm] provided by Solverz. Shown below is an illustrative example of ill-conditioned power flow. The Newton failed while the SICNM easily converged. 
 
 
-```{eval-rst}
-.. plot:: ae/pf/src/ill_pf.py
-   :include-source: True
-   :show-source-link: False
+```{literalinclude} src/ill_pf.py
 ```
+
+![omega](fig/ill_pf.png)
 
 By the way, our implementation of SICNM for MATPOWER can be found [here](https://github.com/rzyu45/MATPOWER-SICNM/blob/main/src/sicnm.m)
 
