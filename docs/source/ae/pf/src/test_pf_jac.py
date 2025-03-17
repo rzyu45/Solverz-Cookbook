@@ -12,8 +12,8 @@ def test_pf_jac(datadir):
     V = mat["V"].reshape((-1,))
     nb = V.shape[0]
     Ybus = mat["Ybus"]
-    G = Ybus.real
-    B = Ybus.imag
+    G = Ybus.real.toarray()
+    B = Ybus.imag.toarray()
     Jbench = mat["J2"]
     Hzbench = mat["Hz"]
     v0 = mat["z0"]
@@ -79,8 +79,8 @@ def test_pf(datadir):
     V = param["V"].reshape((-1,))
     nb = V.shape[0]
     Ybus = param["Ybus"]
-    G = Ybus.real
-    B = Ybus.imag
+    G = Ybus.real.toarray()
+    B = Ybus.imag.toarray()
     ref = (param["ref"] - 1).reshape((-1,)).tolist()
     pv = (param["pv"] - 1).reshape((-1,)).tolist()
     pq = (param["pq"] - 1).reshape((-1,)).tolist()
