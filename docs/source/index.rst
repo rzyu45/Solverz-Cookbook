@@ -26,6 +26,8 @@ Examples on Differential Algebraic Equations
 
 :ref:`Time-domain Simulation of Electric Power Systems <m3b9>`
 
+:ref:`Distribution Network Simulation with PV penetration <ieee33pv>`
+
 :ref:`Method-of-Lines Solution of Network Gas Flow <mol>`
 
 .. toctree::

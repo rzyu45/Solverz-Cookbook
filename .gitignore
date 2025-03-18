@@ -4,3 +4,5 @@
 *.pyc
 /docs/source/ae/pf/src/powerflow
 /docs/source/ae/pf/src/powerflow_njit
+*.nbi
+*.nbc
