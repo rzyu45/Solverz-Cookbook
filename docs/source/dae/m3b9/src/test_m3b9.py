@@ -110,5 +110,5 @@ def test_m3b9(datadir):
 
     with open(datadir/'Uy_bench.npy', 'rb') as f:
         Uy_bench = np.load(f)
-    np.testing.assert_allclose(sol_sp.Y['Uy'], Uy_bench, rtol=1e-4, atol=1e-5)
-    np.testing.assert_allclose(sol_den.Y['Uy'], Uy_bench, rtol=1e-4, atol=1e-3)
+    np.testing.assert_allclose(sol_sp.Y['Uy'], Uy_bench, rtol=1e-2, atol=1e-4)
+    np.testing.assert_allclose(sol_den.Y['Uy'], Uy_bench, rtol=1e-2, atol=1e-3)

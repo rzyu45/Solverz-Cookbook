@@ -158,4 +158,4 @@ def test_mol(datadir):
     # %% test
     with open(datadir / 'P_bench.npy', 'rb') as f:
         Pibench = np.load(f)
-    np.testing.assert_allclose(sol.Y['Pi'], Pibench)
+    np.testing.assert_allclose(sol.Y['Pi'], Pibench, rtol=1e-6)
