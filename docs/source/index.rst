@@ -30,6 +30,8 @@ Examples on Differential Algebraic Equations
 
 :ref:`Method-of-Lines Solution of Network Gas Flow <mol>`
 
+:ref:`Integrated Energy System Simulation <ies>`
+
 .. toctree::
    :hidden:
 
