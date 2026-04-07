@@ -21,6 +21,8 @@ Examples on Finite Difference Algebraic Equations
 
 :ref:`Solving Gas Transmission PDEs using Characteristics <cha>`
 
+:ref:`Solving Gas Transmission PDEs using Koopman Operator Theory <koopman>`
+
 Examples on Differential Algebraic Equations
 --------------------------------------------
 
