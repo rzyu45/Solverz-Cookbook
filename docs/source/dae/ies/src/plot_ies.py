@@ -259,13 +259,18 @@ def run_disturbance():
     return short_term, long_term
 
 
-def plot_frequency_response():
+def get_frequency_response():
     short_term, long_term = run_disturbance()
 
     time = np.concatenate([short_term.T, long_term.T[1:]])
     omega_gt = np.concatenate([short_term.Y["omega_gt"], long_term.Y["omega_gt"][1:]])
     omega_st = np.concatenate([short_term.Y["omega_st"], long_term.Y["omega_st"][1:]])
     omega_coi = np.concatenate([short_term.Y["omega_coi"], long_term.Y["omega_coi"][1:]])
+    return time, omega_gt, omega_st, omega_coi
+
+
+def plot_frequency_response():
+    time, omega_gt, omega_st, omega_coi = get_frequency_response()
 
     plt.plot(time, omega_gt, label="GT")
     plt.plot(time, omega_st, label="ST")
