@@ -21,3 +21,4 @@ sphinxcontrib-serializinghtml
 sphinx-reredirects
 chardet
 Solverz
+SolMuseum
