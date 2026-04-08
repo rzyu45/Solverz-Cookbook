@@ -237,7 +237,7 @@ Here presents the Solverz implementation of IES simulation for the system shown 
 ```{literalinclude} src/plot_ies.py
 ```
 
-The dynamic frequency response after the gas-side disturbance is illustrated below.
+The dynamic fuel consumption of GT after the gas source N0 mass flow injection disturbance is illustrated below.
 
 ```{eval-rst}
 .. plot:: dae/ies/src/plot_ies.py
