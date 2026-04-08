@@ -18,17 +18,20 @@ DX = 100
 QBASE = 37.41
 
 
-def initialize_power_flow():
-    pf = PowerFlow(str(POWER_CASE))
+def build_ies_model(power_case=POWER_CASE, heat_case=HEAT_CASE):
+    pf = PowerFlow(str(power_case))
     pf.run()
 
-    u = pf.Vm * np.exp(1j * pf.Va)
-    s = (pf.Pg - pf.Pd) + 1j * (pf.Qg - pf.Qd)
-    i = (s / u).conjugate()
-    return pf, u.real, u.imag, i.real, i.imag
+    voltage = pf.Vm * np.exp(1j * pf.Va)
+    power = (pf.Pg - pf.Pd) + 1j * (pf.Qg - pf.Qd)
+    current = (power / voltage).conjugate()
+    ux = voltage.real
+    uy = voltage.imag
+    ix = current.real
+    iy = current.imag
 
+    model = Model()
 
-def add_power_subsystems(model, pf, ux, uy, ix, iy):
     gt_0 = gt(
         ux=ux[0],
         uy=uy[0],
@@ -146,7 +149,8 @@ def add_power_subsystems(model, pf, ux, uy, ix, iy):
     )
     model.add(p2g_4.mdl())
 
-    model.add(eps_network(pf).mdl(dyn=True))
+    epsn = eps_network(pf)
+    model.add(epsn.mdl(dyn=True))
 
     model.eqn_gt_ux = Eqn("eqn_gt_ux", model.ux_gt - model.ux[0])
     model.eqn_gt_uy = Eqn("eqn_gt_uy", model.uy_gt - model.uy[0])
@@ -167,25 +171,23 @@ def add_power_subsystems(model, pf, ux, uy, ix, iy):
         if bus in [0, 1, 2]:
             continue
 
-        active_lhs = model.ux[bus] * model.ix[bus] + model.uy[bus] * model.iy[bus]
+        lhs1 = model.ux[bus] * model.ix[bus] + model.uy[bus] * model.iy[bus]
         if bus == 5:
-            active_rhs = model.Pg[bus] - model.pd_eb
+            rhs1 = model.Pg[bus] - model.pd_eb
         elif bus == 4:
-            active_rhs = model.Pg[bus] - model.pd_p2g
+            rhs1 = model.Pg[bus] - model.pd_p2g
         else:
-            active_rhs = model.Pg[bus] - model.Pd[bus]
-        model.add(Eqn(f"eqn_P_{bus}", active_lhs - active_rhs))
+            rhs1 = model.Pg[bus] - model.Pd[bus]
+        model.add(Eqn(f"eqn_P_{bus}", lhs1 - rhs1))
 
-        reactive_lhs = model.uy[bus] * model.ix[bus] - model.ux[bus] * model.iy[bus]
-        reactive_rhs = model.Qg[bus] - model.Qd[bus]
-        model.add(Eqn(f"eqn_Q_{bus}", reactive_lhs - reactive_rhs))
+        lhs2 = model.uy[bus] * model.ix[bus] - model.ux[bus] * model.iy[bus]
+        rhs2 = model.Qg[bus] - model.Qd[bus]
+        model.add(Eqn(f"eqn_Q_{bus}", lhs2 - rhs2))
 
-
-def add_gas_subsystem(model):
-    gf = GasFlow(str(POWER_CASE))
+    gf = GasFlow(str(power_case))
     gf.run(tee=False)
-
     model.add(gas_network(gf).mdl(dx=DX))
+
     model.eqn_p_p2g = Eqn("eqn_p_p2g", model.p_p2g - model.Pi[0])
     model.eqn_q_p2g = Eqn("eqn_q_p2g", model.q_p2g + model.fs[0])
     model.fs_0 = TimeSeriesParam("fs_0", [36.5509116, 36.5509116], [0, 100])
@@ -199,20 +201,17 @@ def add_gas_subsystem(model):
             model.__dict__[f"node_fs_{node}"] = Eqn(f"node_fs_{node}", model.fs[node])
 
         if node not in [8, 9, 10]:
-            load_rhs = 0
+            gas_load = 0
         elif node in [8, 9]:
-            load_rhs = gf.fl[node]
+            gas_load = gf.fl[node]
         else:
-            load_rhs = model.qfuel_gt[0] * QBASE
+            gas_load = model.qfuel_gt[0] * QBASE
+        model.__dict__[f"node_fl_{node}"] = Eqn(f"node_fl_{node}", model.fl[node] - gas_load)
 
-        model.__dict__[f"node_fl_{node}"] = Eqn(f"node_fl_{node}", model.fl[node] - load_rhs)
-
-
-def add_heat_subsystem(model):
-    df = DhsFlow(str(HEAT_CASE))
+    df = DhsFlow(str(heat_case))
     df.run()
-
     model.add(heat_network(df).mdl(dx=DX, dynamic_slack=True))
+
     model.eqn_st_Ts = Eqn("eqn_st_Ts", model.Ts_st - model.Ts_slack)
 
     for node in range(df.n_node):
@@ -225,63 +224,44 @@ def add_heat_subsystem(model):
         else:
             model.eqn_phi_eb = Eqn("eqn_phi_eb", model.phi[5] * 1e6 - model.phi_eb)
 
-
-def build_model():
-    pf, ux, uy, ix, iy = initialize_power_flow()
-
-    model = Model()
-    add_power_subsystems(model, pf, ux, uy, ix, iy)
-    add_gas_subsystem(model)
-    add_heat_subsystem(model)
-
     omega_coi = (model.Tj_st * model.omega_st + model.Tj_gt * model.omega_gt) / (model.Tj_st + model.Tj_gt)
     model.omega_coi = Var("omega_coi", 1)
     model.eqn_omega_coi = Eqn("eqn_omega_coi", model.omega_coi - omega_coi)
-    return model
 
-
-def solve_steady_state():
-    sdae, y0 = build_model().create_instance()
+    sdae, y0 = model.create_instance()
     dae = made_numerical(sdae, y0, sparse=True)
+    return dae, y0
+
+
+def run_ies(power_case=POWER_CASE, heat_case=HEAT_CASE):
+    dae, y0 = build_ies_model(power_case, heat_case)
     sol0 = Rodas(dae, [0, 100 * 3600], y0, Opt(pbar=True))
-    return dae, sol0
 
-
-def run_disturbance():
-    dae, sol0 = solve_steady_state()
     dae.p["fs_0"] = TimeSeriesParam(
         "fs_0",
-        [36.5509116, 37.5509116, 37.5509116],
-        [0, 5, 6],
+        [36.5509116, 47.5509116, 37.5509116],
+        [0, 300, 10 * 3600],
     )
-    short_term = Rodas(dae, [0, 300], sol0.Y[-1], Opt(pbar=True))
-    long_term = Rodas(dae, [300, 10 * 3600], short_term.Y[-1], Opt(pbar=True))
-    return short_term, long_term
+    return Rodas(dae, [0, 300], sol0.Y[-1], Opt(pbar=True))
 
 
-def get_frequency_response():
-    short_term, long_term = run_disturbance()
-
-    time = np.concatenate([short_term.T, long_term.T[1:]])
-    omega_gt = np.concatenate([short_term.Y["omega_gt"], long_term.Y["omega_gt"][1:]])
-    omega_st = np.concatenate([short_term.Y["omega_st"], long_term.Y["omega_st"][1:]])
-    omega_coi = np.concatenate([short_term.Y["omega_coi"], long_term.Y["omega_coi"][1:]])
-    return time, omega_gt, omega_st, omega_coi
+def get_qfuel_response(power_case=POWER_CASE, heat_case=HEAT_CASE):
+    sol = run_ies(power_case, heat_case)
+    time = np.asarray(sol.T).reshape(-1)
+    qfuel = np.asarray(sol.Y["qfuel_gt"]).reshape(-1)
+    return time, qfuel
 
 
-def plot_frequency_response():
-    time, omega_gt, omega_st, omega_coi = get_frequency_response()
-
-    plt.plot(time, omega_gt, label="GT")
-    plt.plot(time, omega_st, label="ST")
-    plt.plot(time, omega_coi, label="COI")
+def plot_qfuel_response():
+    time, qfuel = get_qfuel_response()
+    plt.plot(time, qfuel, label="qfuel_gt")
     plt.xlabel("Time / s")
-    plt.ylabel("Frequency / p.u.")
-    plt.title("Frequency response after gas-source disturbance")
+    plt.ylabel("Gas turbine fuel flow")
+    plt.title("Gas turbine fuel flow under fs_0 disturbance")
     plt.grid()
     plt.legend()
     plt.show()
 
 
 if __name__ == "__main__":
-    plot_frequency_response()
+    plot_qfuel_response()

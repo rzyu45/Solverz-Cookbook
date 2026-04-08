@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 
 def load_plot_module():
@@ -14,33 +15,18 @@ def load_plot_module():
 
 def test_ies(datadir):
     module = load_plot_module()
-    module.POWER_CASE = datadir / "caseI.xlsx"
-    module.HEAT_CASE = datadir / "case_heat.xlsx"
+    benchmark = pd.read_excel(datadir / "benchmark.xlsx")
 
-    time, omega_gt, omega_st, omega_coi = module.get_frequency_response()
+    time_bench = benchmark["time"].to_numpy(dtype=float)
+    qfuel_bench = benchmark["qfuel"].to_numpy(dtype=float)
 
-    assert time.ndim == 1
-    assert omega_gt.shape == time.shape
-    assert omega_st.shape == time.shape
-    assert omega_coi.shape == time.shape
+    time, qfuel = module.get_qfuel_response(
+        power_case=datadir / "caseI.xlsx",
+        heat_case=datadir / "case_heat.xlsx",
+    )
 
-    assert np.isfinite(time).all()
-    assert np.isfinite(omega_gt).all()
-    assert np.isfinite(omega_st).all()
-    assert np.isfinite(omega_coi).all()
+    assert time.shape == time_bench.shape
+    assert qfuel.shape == qfuel_bench.shape
 
-    np.testing.assert_allclose(time[0], 0.0)
-    np.testing.assert_allclose(time[-1], 10 * 3600)
-    assert np.all(np.diff(time) > 0)
-
-    np.testing.assert_allclose(omega_gt[0], 1.0, atol=5e-3)
-    np.testing.assert_allclose(omega_st[0], 1.0, atol=5e-3)
-    np.testing.assert_allclose(omega_coi[0], 1.0, atol=5e-3)
-
-    assert np.max(np.abs(omega_gt - omega_gt[0])) > 1e-4
-    assert np.max(np.abs(omega_st - omega_st[0])) > 1e-4
-    assert np.max(np.abs(omega_coi - omega_coi[0])) > 1e-4
-
-    final_min = min(omega_gt[-1], omega_st[-1])
-    final_max = max(omega_gt[-1], omega_st[-1])
-    assert final_min <= omega_coi[-1] <= final_max
+    np.testing.assert_allclose(time, time_bench, rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(qfuel, qfuel_bench, rtol=1e-6, atol=1e-8)
