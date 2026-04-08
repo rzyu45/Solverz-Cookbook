@@ -61,31 +61,39 @@ def rollout_with_solverz(kx, ku, x0_test, u_future):
     return sol.Y["x"]
 
 
-pin_norm, pout_norm, min_norm, mout_norm = load_dataset()
-X = build_observables(pout_norm, mout_norm)
-U = np.column_stack([pin_norm, min_norm])
-Kx, Ku = identify_koopman_model(X, U)
+def prepare_koopman_case():
+    pin_norm, pout_norm, qin_norm, qout_norm = load_dataset()
+    x_data = build_observables(pout_norm, qout_norm)
+    u_data = np.column_stack([pin_norm, qin_norm])
+    kx, ku = identify_koopman_model(x_data, u_data)
+    x0_test = x_data[N_TRAIN]
+    u_future = u_data[N_TRAIN + 1 :]
+    return x_data, u_data, kx, ku, x0_test, u_future
 
-x0_test = X[N_TRAIN]
-u_future = U[N_TRAIN + 1 :]
-x_pred = rollout_with_solverz(Kx, Ku, x0_test, u_future)
 
-x_true = X[N_TRAIN : N_TRAIN + len(x_pred)]
-rmse = np.sqrt(np.mean((x_true - x_pred) ** 2))
+def main():
+    x_data, _, kx, ku, x0_test, u_future = prepare_koopman_case()
+    x_pred = rollout_with_solverz(kx, ku, x0_test, u_future)
+    x_true = x_data[N_TRAIN : N_TRAIN + len(x_pred)]
+    rmse = np.sqrt(np.mean((x_true - x_pred) ** 2))
 
-obs_labels = ["Pout linear", "Mout linear", "-Pout exp(-Pout)", "exp(-Pout) sin(-Pout)"]
-t_all = np.arange(N)
-t_pred = np.arange(N_TRAIN, N_TRAIN + len(x_pred))
+    obs_labels = ["Pout linear", "Mout linear", "-Pout exp(-Pout)", "exp(-Pout) sin(-Pout)"]
+    t_all = np.arange(N)
+    t_pred = np.arange(N_TRAIN, N_TRAIN + len(x_pred))
 
-fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
-for idx, ax in enumerate(axes):
-    ax.plot(t_all, X[:, idx], "k-", lw=1.5, label="True value")
-    ax.plot(t_pred, x_pred[:, idx], "r--", lw=1.5, label="Prediction")
-    ax.axvline(N_TRAIN, color="g", ls="-.", lw=1.5, label="Train/test boundary")
-    ax.set_ylabel(obs_labels[idx])
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8, loc="best")
+    fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
+    for idx, ax in enumerate(axes):
+        ax.plot(t_all, x_data[:, idx], "k-", lw=1.5, label="True value")
+        ax.plot(t_pred, x_pred[:, idx], "r--", lw=1.5, label="Prediction")
+        ax.axvline(N_TRAIN, color="g", ls="-.", lw=1.5, label="Train/test boundary")
+        ax.set_ylabel(obs_labels[idx])
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8, loc="best")
 
-axes[-1].set_xlabel("Time step k")
-fig.suptitle(f"Koopman + Solverz prediction (RMSE = {rmse:.4e})", fontsize=13)
-plt.tight_layout()
+    axes[-1].set_xlabel("Time step k")
+    fig.suptitle(f"Koopman + Solverz prediction (RMSE = {rmse:.4e})", fontsize=13)
+    plt.tight_layout()
+
+
+if __name__ == "__main__":
+    main()
