@@ -28,7 +28,7 @@ jobs:
       run: |
         uv venv
         uv pip install -r docs/requirements.txt
-        uv pip install pytest pytest-datadir pandas openpyxl
+        uv pip install pytest pytest-datadir pandas openpyxl cyipopt
 
     - name: Run tests
       run: |
