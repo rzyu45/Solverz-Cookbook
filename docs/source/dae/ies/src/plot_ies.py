@@ -11,7 +11,13 @@ from SolMuseum.dae import gas_network, gt, heat_network, pv, st
 from SolUtil import DhsFlow, GasFlow, PowerFlow
 
 
-DATA_DIR = Path(__file__).resolve().parent / "test_ies"
+try:
+    _THIS_DIR = Path(__file__).resolve().parent
+except NameError:
+    # Sphinx plot_directive runs scripts via exec() where __file__ is not defined;
+    # the working directory is docs/source/ (where conf.py lives).
+    _THIS_DIR = Path("dae/ies/src").resolve()
+DATA_DIR = _THIS_DIR / "test_ies"
 POWER_CASE = DATA_DIR / "caseI.xlsx"
 HEAT_CASE = DATA_DIR / "case_heat.xlsx"
 DX = 100
