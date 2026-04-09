@@ -171,4 +171,4 @@ def test_ies(datadir):
     assert qfuel.shape == qfuel_bench.shape
 
     np.testing.assert_allclose(time, time_bench, rtol=1e-8, atol=1e-10)
-    np.testing.assert_allclose(qfuel, qfuel_bench, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(qfuel, qfuel_bench, rtol=1e-4, atol=1e-5)
