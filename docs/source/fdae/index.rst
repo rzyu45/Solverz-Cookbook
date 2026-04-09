@@ -11,3 +11,4 @@ Contents
    :titlesonly:
 
    cha/cha.md
+   koopman/koopman.md
