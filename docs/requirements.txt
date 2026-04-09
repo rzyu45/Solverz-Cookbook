@@ -20,4 +20,6 @@ sphinxcontrib-qthelp
 sphinxcontrib-serializinghtml
 sphinx-reredirects
 chardet
-Solverz
+Solverz>=0.7.2
+SolMuseum>=0.1.4
+SolUtil @ git+https://github.com/rzyu45/SolUtil@master

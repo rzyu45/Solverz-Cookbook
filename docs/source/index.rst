@@ -8,6 +8,14 @@ Welcome to Solverz Cookbook!
 
 Here presents a collection of modelling and numerical solution examples based on Solverz.
 
+.. note::
+
+   This cookbook is tested against the following dependency versions:
+
+   - **Solverz** >= 0.7.2
+   - **SolMuseum** >= 0.1.4
+   - **SolUtil** (latest master)
+
 
 Examples on Algebraic Equations
 -------------------------------
@@ -29,6 +37,8 @@ Examples on Differential Algebraic Equations
 :ref:`Distribution Network Simulation with PV penetration <ieee33pv>`
 
 :ref:`Method-of-Lines Solution of Network Gas Flow <mol>`
+
+:ref:`Integrated Energy System Simulation <ies>`
 
 .. toctree::
    :hidden:
