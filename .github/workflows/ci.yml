@@ -33,4 +33,5 @@ jobs:
 
     - name: Run tests
       run: |
+        $env:PATH = "$(.venv\Scripts\idaes bin-directory);$env:PATH"
         .venv\Scripts\pytest docs/ -v
