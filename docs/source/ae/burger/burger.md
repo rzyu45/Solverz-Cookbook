@@ -2,6 +2,8 @@
 
 # The Analytical Solution to the Inviscid Burger's Equation
 
+*Author: [Ruizhi Yu](https://github.com/rzyu45)*
+
 The inviscid burger's equation is a representative of the nonlinear hyperbolic partial differential equations (PDEs) with formula
 ```{math}
 \frac{\partial u}{\partial t}+\frac{\partial}{\partial x}\left(\frac{u^2}{2}\right)=0.

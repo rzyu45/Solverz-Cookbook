@@ -2,6 +2,8 @@
 
 # Method-of-Lines Solution of Network Gas Flow
 
+*Author: [Ruizhi Yu](https://github.com/rzyu45)*
+
 Here we consider the transmission of gas in the following networks.
 
 ![11node](fig/11node.png)

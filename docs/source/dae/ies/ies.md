@@ -2,6 +2,8 @@
 
 # Integrated Energy System Simulation
 
+*Author: [Rongcheng Zheng](https://github.com/ZhengRongcheng)*
+
 Here, we consider the dynamic simulation of the following integrated energy system (IES).
 
 ![ies](fig/Cdyn111.svg)
