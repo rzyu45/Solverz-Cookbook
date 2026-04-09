@@ -8,7 +8,7 @@ on:
       - '*'
 
 jobs:
-  tests:
+  tests_windows:
     runs-on: windows-2022
     strategy:
       matrix:
@@ -28,10 +28,38 @@ jobs:
       run: |
         uv venv
         uv pip install -r docs/requirements.txt
-        uv pip install pytest pytest-datadir pandas openpyxl idaes-pse
-        .venv\Scripts\idaes get-extensions
+        uv pip install pytest pytest-datadir pandas openpyxl
 
     - name: Run tests
       run: |
-        $env:PATH = "$(.venv\Scripts\idaes bin-directory);$env:PATH"
-        .venv\Scripts\pytest docs/ -v
+        .venv\Scripts\pytest docs/ -v --ignore=docs/source/dae/ies
+
+  tests_macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.11"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install IPOPT
+      run: |
+        brew install ipopt
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
+      with:
+        enable-cache: true
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install -r docs/requirements.txt
+        uv pip install pytest pytest-datadir pandas openpyxl
+
+    - name: Run tests
+      run: |
+        .venv/bin/pytest docs/source/dae/ies -v
