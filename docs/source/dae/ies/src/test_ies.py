@@ -157,7 +157,7 @@ def test_ies(datadir):
         [36.5509116, 47.5509116, 37.5509116],
         [0, 300, 10 * 3600],
     )
-    sol = Rodas(dae, [0, 300], sol0.Y[-1], Opt(pbar=True))
+    sol = Rodas(dae, np.linspace(0, 300, 301), sol0.Y[-1], Opt(pbar=True))
 
     time = np.asarray(sol.T).reshape(-1)
     qfuel = np.asarray(sol.Y["qfuel_gt"]).reshape(-1)

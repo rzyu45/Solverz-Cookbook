@@ -12,7 +12,9 @@ build:
     python: "3.11"
   jobs:
     post_install:
-      - idaes get-extensions
+      - wget -q "https://github.com/coin-or/Ipopt/releases/download/releases%2F3.14.12/Ipopt-3.14.12-linux64.zip" -O /tmp/ipopt.zip
+      - unzip -q /tmp/ipopt.zip -d /tmp
+      - cp /tmp/Ipopt-3.14.12-linux64/bin/ipopt $READTHEDOCS_VIRTUALENV/bin/
 
 # Build documentation in the "docs/" directory with Sphinx
 sphinx:
