@@ -22,3 +22,4 @@ sphinx-reredirects
 chardet
 Solverz
 SolMuseum
+SolUtil @ git+https://github.com/rzyu45/SolUtil@master
