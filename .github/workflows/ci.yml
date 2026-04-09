@@ -28,7 +28,8 @@ jobs:
       run: |
         uv venv
         uv pip install -r docs/requirements.txt
-        uv pip install pytest pytest-datadir pandas openpyxl cyipopt
+        uv pip install pytest pytest-datadir pandas openpyxl idaes-pse
+        .venv\Scripts\idaes get-extensions
 
     - name: Run tests
       run: |
