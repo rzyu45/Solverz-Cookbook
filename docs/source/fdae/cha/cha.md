@@ -2,6 +2,8 @@
 
 # Solving Gas Transmission PDEs using Characteristics
 
+*Author: [Ruizhi Yu](https://github.com/rzyu45)*
+
 The hyperbolic partial differential equations (PDEs) describing the conservation of isothermal gas transmission are
 ```{math}
 :label: pde0

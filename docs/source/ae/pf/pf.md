@@ -2,6 +2,8 @@
 
 # The Calculation of Electric Power Flow
 
+*Author: [Ruizhi Yu](https://github.com/rzyu45)*
+
 Power flow is fundamental in electric power system analysis. Given electric load and generation, we want to calculate 
 the bus voltage and the power distribution[^book1].
 

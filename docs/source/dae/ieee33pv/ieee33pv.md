@@ -2,6 +2,8 @@
 
 # Distribution Network Simulation with PV penetration
 
+*Author: [Ruizhi Yu](https://github.com/rzyu45)*
+
 The following distribution network is composed of 4 PVs and 2 synchronous machines.
 
 ![omega](fig/ieee33pv.svg)

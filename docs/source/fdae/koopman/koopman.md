@@ -2,6 +2,8 @@
 
 # Solving Gas Transmission PDEs using Koopman Operator Theory
 
+*Author: [Yuan Li](https://github.com/yuanyuan11234)*
+
 The natural gas pipeline model is a nonlinear dynamic system driven by the boundary pressure and mass flow rate. Instead of solving the governing partial differential equations (PDEs) directly, we build a data-driven surrogate with Koopman operator theory and then use Solverz to perform multi-step prediction.
 
 At each discrete time step $k$, four signals are measured:
