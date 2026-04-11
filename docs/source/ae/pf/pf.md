@@ -62,6 +62,38 @@ On a laptop equipped with Ryzen 5800H CPU, it took hundreds of seconds to compil
 
 The compiled results are cached locally, so that only one compilation is required for each model. We recommend that one debug one's models without jit and compile the models in efficiency-demanding cases.
 
+## Matrix-form power flow with `Mat_Mul`
+
+Since version 0.8.0, Solverz supports a compact matrix-vector formulation of power flow using `Mat_Mul`. Instead of element-wise for-loops, we express the power injection equations in rectangular coordinates ($e$, $f$) using matrix-vector products:
+
+```{math}
+\left\{
+\begin{aligned}
+&\mathbf{p}=\mathbf{e}\odot(\mathbf{G}\mathbf{e}-\mathbf{B}\mathbf{f})+\mathbf{f}\odot(\mathbf{B}\mathbf{e}+\mathbf{G}\mathbf{f})\\
+&\mathbf{q}=\mathbf{f}\odot(\mathbf{G}\mathbf{e}-\mathbf{B}\mathbf{f})-\mathbf{e}\odot(\mathbf{B}\mathbf{e}+\mathbf{G}\mathbf{f})
+\end{aligned}
+\right.
+```
+
+where $\mathbf{G}$ and $\mathbf{B}$ are the conductance and susceptance matrices (sparse), and $\odot$ denotes element-wise multiplication.
+
+Solverz automatically computes the symbolic Jacobian via {ref}`matrix calculus <matrix_calculus>`. For example, the Jacobian of the active power equation w.r.t. $\mathbf{e}$ is:
+
+```{math}
+\frac{\partial\mathbf{p}}{\partial\mathbf{e}}=\operatorname{diag}(\mathbf{G}\mathbf{e}-\mathbf{B}\mathbf{f})+\operatorname{diag}(\mathbf{e})\mathbf{G}+\operatorname{diag}(\mathbf{f})\mathbf{B}
+```
+
+The implementation for the `case30` system:
+
+```{literalinclude} src/pf_matmul.py
+```
+
+Starting from a flat start ($e=1$, $f=0$), the Newton-Raphson method converges in 4 iterations.
+
+```{note}
+The `Mat_Mul` formulation is much more compact than the for-loop approach — the entire power flow model is defined in just a few lines. The Jacobian is computed automatically by the matrix calculus engine, eliminating the need for manual derivation.
+```
+
 ## Ill-conditioned Power flow
 
 The Newton method sometimes fails because it is not robust enough. We view this cases as having ill-conditioned initial settings. In this cases, we can use some more robust methods, such as the semi-implicit continuous Newton method (SICNM)[^sicnm] provided by Solverz. Shown below is an illustrative example of ill-conditioned power flow. The Newton failed while the SICNM easily converged. 
