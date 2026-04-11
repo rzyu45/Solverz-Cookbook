@@ -9,21 +9,93 @@ from Solverz import (Var, Eqn, Model, sin, cos, made_numerical, Param,
                      module_printer, sicnm, Opt, Mat_Mul, nr_method)
 
 
-def test_pf_jac(datadir):
-    mat = loadmat(datadir / 'pf.mat')
-    V = mat["V"].reshape((-1,))
+def _load_case30(datadir):
+    """Load case30 data and return parsed system parameters."""
+    param = loadmat(datadir / 'pf.mat')
+    PQ = loadmat(datadir / 'pq.mat')
+
+    V = param["V"].reshape((-1,))
     nb = V.shape[0]
-    Ybus = mat["Ybus"]
+    Ybus = param["Ybus"]
     G = Ybus.real.toarray()
     B = Ybus.imag.toarray()
-    Jbench = mat["J2"]
-    Hzbench = mat["Hz"]
-    v0 = mat["z0"]
-    ref = (mat["ref"] - 1).reshape((-1,)).tolist()
-    pv = (mat["pv"] - 1).reshape((-1,)).tolist()
-    pq = (mat["pq"] - 1).reshape((-1,)).tolist()
+    ref = (param["ref"] - 1).reshape((-1,)).tolist()
+    pv = (param["pv"] - 1).reshape((-1,)).tolist()
+    pq = (param["pq"] - 1).reshape((-1,)).tolist()
+    mbase = 100
+    Pg = PQ["Pg"].reshape(-1) / mbase
+    Qg = PQ["Qg"].reshape(-1) / mbase
+    Pd = PQ["Pd"].reshape(-1) / mbase
+    Qd = PQ["Qd"].reshape(-1) / mbase
+
+    return dict(V=V, nb=nb, Ybus=Ybus, G=G, B=B,
+                ref=ref, pv=pv, pq=pq,
+                Pg=Pg, Qg=Qg, Pd=Pd, Qd=Qd, param=param)
+
+
+def _build_polar_model(case):
+    """Build element-wise polar power flow model from case data."""
+    V, nb, G, B = case['V'], case['nb'], case['G'], case['B']
+    ref, pv, pq = case['ref'], case['pv'], case['pq']
+    Pg, Qg, Pd, Qd = case['Pg'], case['Qg'], case['Pd'], case['Qd']
 
     m = Model()
+    m.Va = Var("Va", np.angle(V)[pv + pq])
+    m.Vm = Var("Vm", np.abs(V)[pq])
+    m.Pg = Param('Pg', Pg)
+    m.Qg = Param('Qg', Qg)
+    m.Pd = Param('Pd', Pd)
+    m.Qd = Param('Qd', Qd)
+
+    def get_Vm(idx):
+        if idx in ref + pv:
+            return np.abs(V)[idx]
+        elif idx in pq:
+            return m.Vm[pq.index(idx)]
+
+    def get_Va(idx):
+        if idx in ref:
+            return np.angle(V)[idx]
+        elif idx in pv + pq:
+            return m.Va[(pv + pq).index(idx)]
+
+    for i in pv + pq:
+        expr = 0
+        Vmi = get_Vm(i)
+        Vai = get_Va(i)
+        for j in range(nb):
+            Vmj = get_Vm(j)
+            Vaj = get_Va(j)
+            expr += Vmi * Vmj * (G[i, j] * cos(Vai - Vaj) +
+                                 B[i, j] * sin(Vai - Vaj))
+        m.__dict__[f"P_eqn_{i}"] = Eqn(f"P_eqn_{i}", expr + m.Pd[i] - m.Pg[i])
+
+    for i in pq:
+        expr = 0
+        Vmi = get_Vm(i)
+        Vai = get_Va(i)
+        for j in range(nb):
+            Vmj = get_Vm(j)
+            Vaj = get_Va(j)
+            expr += Vmi * Vmj * (G[i, j] * sin(Vai - Vaj) -
+                                 B[i, j] * cos(Vai - Vaj))
+        m.__dict__[f"Q_eqn_{i}"] = Eqn(f"Q_eqn_{i}", expr + m.Qd[i] - m.Qg[i])
+
+    return m
+
+
+def test_pf_jac(datadir):
+    """Test Jacobian and Hessian-vector product against MATLAB benchmarks."""
+    case = _load_case30(datadir)
+    param = case['param']
+    Jbench = param["J2"]
+    Hzbench = param["Hz"]
+    v0 = param["z0"]
+
+    m = Model()
+    V, nb, G, B = case['V'], case['nb'], case['G'], case['B']
+    ref, pv, pq = case['ref'], case['pv'], case['pq']
+
     m.Va = Var("Va", np.angle(V)[pv + pq])
     m.Vm = Var("Vm", np.abs(V)[pq])
 
@@ -75,66 +147,16 @@ def test_pf_jac(datadir):
 
 
 def test_pf(datadir):
-    param = loadmat(datadir / 'pf.mat')
-    PQ = loadmat(datadir / 'pq.mat')
-    # %% model
-    V = param["V"].reshape((-1,))
-    nb = V.shape[0]
-    Ybus = param["Ybus"]
-    G = Ybus.real.toarray()
-    B = Ybus.imag.toarray()
-    ref = (param["ref"] - 1).reshape((-1,)).tolist()
-    pv = (param["pv"] - 1).reshape((-1,)).tolist()
-    pq = (param["pq"] - 1).reshape((-1,)).tolist()
+    """Test module_printer code generation + SICNM for ill-conditioned case."""
+    case = _load_case30(datadir)
+    m = _build_polar_model(case)
 
-    m = Model()
-    m.Va = Var("Va", np.angle(V)[pv + pq])
-    m.Vm = Var("Vm", np.abs(V)[pq])
-    m.Pg = Param('Pg', PQ['Pg'].reshape(-1, ) / 100)
-    m.Qg = Param('Qg', PQ['Qg'].reshape(-1, ) / 100)
-    m.Pd = Param('Pd', PQ['Pd'].reshape(-1, ) / 100)
-    m.Qd = Param('Qd', PQ['Qd'].reshape(-1, ) / 100)
-
-    def get_Vm(idx):
-        if idx in ref + pv:
-            return np.abs(V)[idx]
-        elif idx in pq:
-            return m.Vm[pq.index(idx)]
-
-    def get_Va(idx):
-        if idx in ref:
-            return np.angle(V)[idx]
-        elif idx in pv + pq:
-            return m.Va[(pv + pq).index(idx)]
-
-    for i in pv + pq:
-        expr = 0
-        Vmi = get_Vm(i)
-        Vai = get_Va(i)
-        for j in range(nb):
-            Vmj = get_Vm(j)
-            Vaj = get_Va(j)
-            expr += Vmi * Vmj * (G[i, j] * cos(Vai - Vaj) +
-                                 B[i, j] * sin(Vai - Vaj))
-        m.__dict__[f"P_eqn_{i}"] = Eqn(f"P_eqn_{i}", expr + m.Pd[i] - m.Pg[i])
-
-    for i in pq:
-        expr = 0
-        Vmi = get_Vm(i)
-        Vai = get_Va(i)
-        for j in range(nb):
-            Vmj = get_Vm(j)
-            Vaj = get_Va(j)
-            expr += Vmi * Vmj * (G[i, j] * sin(Vai - Vaj) -
-                                 B[i, j] * cos(Vai - Vaj))
-        m.__dict__[f"Q_eqn_{i}"] = Eqn(f"Q_eqn_{i}", expr + m.Qd[i] - m.Qg[i])
-    # %% create instance
     spf, y0 = m.create_instance()
 
     current_file_path = os.path.abspath(__file__)
     current_folder = os.path.dirname(current_file_path)
 
-    test_folder_path = current_folder + '\\Solverz_cookbook_ae'
+    test_folder_path = os.path.join(current_folder, 'Solverz_cookbook_ae')
     sys.path.extend([test_folder_path])
 
     pyprinter_njit = module_printer(spf,
@@ -175,95 +197,29 @@ def test_pf(datadir):
 
 
 def test_pf_matmul(datadir):
-    """Cross-validate Mat_Mul (rectangular) vs element-wise (polar) power flow.
+    """Test Mat_Mul power flow via module_printer (rectangular coordinates).
 
-    Both formulations solve the same case30 system from a flat start.
-    The solutions are converted to the same representation and compared.
+    Builds the Mat_Mul rectangular-coordinate model, generates a module
+    via module_printer, solves via Newton-Raphson, and cross-validates
+    against the element-wise polar form solved inline.
     """
-    param = loadmat(datadir / 'pf.mat')
-    PQ = loadmat(datadir / 'pq.mat')
-
-    V = param["V"].reshape((-1,))
-    nb = V.shape[0]
-    Ybus = param["Ybus"].tocsc()
+    case = _load_case30(datadir)
+    V, nb = case['V'], case['nb']
+    Ybus = case['Ybus'].tocsc()
     G_full = Ybus.real
     B_full = Ybus.imag
-    G_dense = G_full.toarray()
-    B_dense = B_full.toarray()
-    ref = (param["ref"] - 1).reshape((-1,)).tolist()
-    pv = (param["pv"] - 1).reshape((-1,)).tolist()
-    pq = (param["pq"] - 1).reshape((-1,)).tolist()
+    ref, pv, pq = case['ref'], case['pv'], case['pq']
     non_ref = pv + pq
-    mbase = 100
+    Pinj = case['Pg'] - case['Pd']
+    Qinj = case['Qg'] - case['Qd']
     e0 = V.real
     f0 = V.imag
-    Pg = PQ["Pg"].reshape(-1) / mbase
-    Qg = PQ["Qg"].reshape(-1) / mbase
-    Pd = PQ["Pd"].reshape(-1) / mbase
-    Qd = PQ["Qd"].reshape(-1) / mbase
-    Pinj = Pg - Pd
-    Qinj = Qg - Qd
 
-    # --- 1. Element-wise polar form ---
-    m1 = Model()
-    m1.Va = Var("Va", np.zeros(len(non_ref)))
-    m1.Vm = Var("Vm", np.ones(len(pq)))
-    m1.Pg = Param('Pg', Pg)
-    m1.Qg = Param('Qg', Qg)
-    m1.Pd = Param('Pd', Pd)
-    m1.Qd = Param('Qd', Qd)
-
-    def get_Vm(idx):
-        if idx in ref + pv:
-            return np.abs(V)[idx]
-        elif idx in pq:
-            return m1.Vm[pq.index(idx)]
-
-    def get_Va(idx):
-        if idx in ref:
-            return np.angle(V)[idx]
-        elif idx in pv + pq:
-            return m1.Va[(pv + pq).index(idx)]
-
-    for i in pv + pq:
-        expr = 0
-        Vmi = get_Vm(i)
-        Vai = get_Va(i)
-        for j in range(nb):
-            Vmj = get_Vm(j)
-            Vaj = get_Va(j)
-            expr += Vmi * Vmj * (G_dense[i, j] * cos(Vai - Vaj)
-                                 + B_dense[i, j] * sin(Vai - Vaj))
-        m1.__dict__[f"P_eqn_{i}"] = Eqn(f"P_eqn_{i}", expr + m1.Pd[i] - m1.Pg[i])
-
-    for i in pq:
-        expr = 0
-        Vmi = get_Vm(i)
-        Vai = get_Va(i)
-        for j in range(nb):
-            Vmj = get_Vm(j)
-            Vaj = get_Va(j)
-            expr += Vmi * Vmj * (G_dense[i, j] * sin(Vai - Vaj)
-                                 - B_dense[i, j] * cos(Vai - Vaj))
-        m1.__dict__[f"Q_eqn_{i}"] = Eqn(f"Q_eqn_{i}", expr + m1.Qd[i] - m1.Qg[i])
-
-    spf1, y01 = m1.create_instance()
-    mdl1 = made_numerical(spf1, y01, sparse=True)
-    sol1 = nr_method(mdl1, y01)
-
-    # Reconstruct polar solution as full voltage
-    Vm_polar = np.abs(V).copy()
-    Va_polar = np.angle(V).copy()
-    Va_polar[pv + pq] = sol1.y["Va"]
-    Vm_polar[pq] = sol1.y["Vm"]
-
-    # --- 2. Mat_Mul rectangular form ---
+    # --- Submatrices for non-reference buses ---
     n_nr = len(non_ref)
-    n_pq = len(pq)
-    n_pv = len(pv)
-
     G_nr = csc_array(G_full[np.ix_(non_ref, non_ref)])
     B_nr = csc_array(B_full[np.ix_(non_ref, non_ref)])
+
     e_ref = e0[ref[0]]
     f_ref = f0[ref[0]]
     G_ref_col = G_full[non_ref, ref[0]].toarray().ravel()
@@ -279,55 +235,79 @@ def test_pf_matmul(datadir):
     p_ref_pq = G_pq_ref_col * e_ref - B_pq_ref_col * f_ref
     q_ref_pq = B_pq_ref_col * e_ref + G_pq_ref_col * f_ref
 
-    m2 = Model()
-    m2.e = Var("e", np.ones(n_nr))
-    m2.f = Var("f", np.zeros(n_nr))
-    m2.G_nr = Param("G_nr", G_nr, dim=2, sparse=True)
-    m2.B_nr = Param("B_nr", B_nr, dim=2, sparse=True)
-    m2.G_pq = Param("G_pq", G_pq, dim=2, sparse=True)
-    m2.B_pq = Param("B_pq", B_pq, dim=2, sparse=True)
-    m2.p_ref = Param("p_ref", p_ref)
-    m2.q_ref = Param("q_ref", q_ref)
-    m2.p_ref_pq = Param("p_ref_pq", p_ref_pq)
-    m2.q_ref_pq = Param("q_ref_pq", q_ref_pq)
-    m2.Pinj = Param("Pinj", Pinj[non_ref])
-    m2.Qinj = Param("Qinj", Qinj[pq])
+    # --- Build Mat_Mul model ---
+    m = Model()
+    m.e = Var("e", np.ones(n_nr))
+    m.f = Var("f", np.zeros(n_nr))
+    m.G_nr = Param("G_nr", G_nr, dim=2, sparse=True)
+    m.B_nr = Param("B_nr", B_nr, dim=2, sparse=True)
+    m.G_pq = Param("G_pq", G_pq, dim=2, sparse=True)
+    m.B_pq = Param("B_pq", B_pq, dim=2, sparse=True)
+    m.p_ref = Param("p_ref", p_ref)
+    m.q_ref = Param("q_ref", q_ref)
+    m.p_ref_pq = Param("p_ref_pq", p_ref_pq)
+    m.q_ref_pq = Param("q_ref_pq", q_ref_pq)
+    m.Pinj = Param("Pinj", Pinj[non_ref])
+    m.Qinj = Param("Qinj", Qinj[pq])
 
-    m2.P_eqn = Eqn("P_balance",
-                    m2.e * (Mat_Mul(m2.G_nr, m2.e) - Mat_Mul(m2.B_nr, m2.f) + m2.p_ref)
-                    + m2.f * (Mat_Mul(m2.B_nr, m2.e) + Mat_Mul(m2.G_nr, m2.f) + m2.q_ref)
-                    - m2.Pinj)
+    m.P_eqn = Eqn("P_balance",
+                   m.e * (Mat_Mul(m.G_nr, m.e) - Mat_Mul(m.B_nr, m.f) + m.p_ref)
+                   + m.f * (Mat_Mul(m.B_nr, m.e) + Mat_Mul(m.G_nr, m.f) + m.q_ref)
+                   - m.Pinj)
 
-    e_pq = m2.e[pq_in_nr[0]:pq_in_nr[-1] + 1]
-    f_pq = m2.f[pq_in_nr[0]:pq_in_nr[-1] + 1]
-    m2.Q_eqn = Eqn("Q_balance",
-                    f_pq * (Mat_Mul(m2.G_pq, m2.e) - Mat_Mul(m2.B_pq, m2.f) + m2.p_ref_pq)
-                    - e_pq * (Mat_Mul(m2.B_pq, m2.e) + Mat_Mul(m2.G_pq, m2.f) + m2.q_ref_pq)
-                    - m2.Qinj)
+    e_pq = m.e[pq_in_nr[0]:pq_in_nr[-1] + 1]
+    f_pq = m.f[pq_in_nr[0]:pq_in_nr[-1] + 1]
+    m.Q_eqn = Eqn("Q_balance",
+                   f_pq * (Mat_Mul(m.G_pq, m.e) - Mat_Mul(m.B_pq, m.f) + m.p_ref_pq)
+                   - e_pq * (Mat_Mul(m.B_pq, m.e) + Mat_Mul(m.G_pq, m.f) + m.q_ref_pq)
+                   - m.Qinj)
 
     pv_in_nr = [non_ref.index(i) for i in pv]
     Vm_pv_sq = np.abs(V[pv]) ** 2
-    m2.Vm_sq = Param("Vm_sq", Vm_pv_sq)
-    e_pv = m2.e[pv_in_nr[0]:pv_in_nr[-1] + 1]
-    f_pv = m2.f[pv_in_nr[0]:pv_in_nr[-1] + 1]
-    m2.V_eqn = Eqn("V_pv", e_pv ** 2 + f_pv ** 2 - m2.Vm_sq)
+    m.Vm_sq = Param("Vm_sq", Vm_pv_sq)
+    e_pv = m.e[pv_in_nr[0]:pv_in_nr[-1] + 1]
+    f_pv = m.f[pv_in_nr[0]:pv_in_nr[-1] + 1]
+    m.V_eqn = Eqn("V_pv", e_pv ** 2 + f_pv ** 2 - m.Vm_sq)
 
-    spf2, y02 = m2.create_instance()
-    mdl2 = made_numerical(spf2, y02, sparse=True)
-    sol2 = nr_method(mdl2, y02)
+    # --- Generate module via module_printer ---
+    spf, y0 = m.create_instance()
 
-    # Reconstruct rectangular solution as full voltage
+    current_folder = os.path.dirname(os.path.abspath(__file__))
+    test_folder_path = os.path.join(current_folder, 'Solverz_cookbook_matmul')
+    sys.path.extend([test_folder_path])
+
+    printer = module_printer(spf, y0, 'pf_matmul',
+                             directory=test_folder_path)
+    printer.render()
+
+    from pf_matmul import mdl, y as y0_mod
+
+    sol = nr_method(mdl, y0_mod)
+
+    # --- Reconstruct full voltage ---
     e_sol = np.zeros(nb)
     f_sol = np.zeros(nb)
     e_sol[ref] = e_ref
     f_sol[ref] = f_ref
-    e_sol[non_ref] = sol2.y["e"]
-    f_sol[non_ref] = sol2.y["f"]
+    e_sol[non_ref] = sol.y["e"]
+    f_sol[non_ref] = sol.y["f"]
     Vm_rect = np.sqrt(e_sol ** 2 + f_sol ** 2)
     Va_rect = np.arctan2(f_sol, e_sol)
 
-    # --- 3. Cross-validate ---
+    # --- Cross-validate against inline polar form ---
+    m_polar = _build_polar_model(case)
+    spf_polar, y0_polar = m_polar.create_instance()
+    mdl_polar = made_numerical(spf_polar, y0_polar, sparse=True)
+    sol_polar = nr_method(mdl_polar, y0_polar)
+
+    Vm_polar = np.abs(V).copy()
+    Va_polar = np.angle(V).copy()
+    Va_polar[pv + pq] = sol_polar.y["Va"]
+    Vm_polar[pq] = sol_polar.y["Vm"]
+
     np.testing.assert_allclose(Vm_rect[non_ref], Vm_polar[non_ref], atol=1e-5,
-                               err_msg="Vm mismatch between Mat_Mul and element-wise forms")
+                               err_msg="Vm mismatch between Mat_Mul module and polar inline")
     np.testing.assert_allclose(Va_rect[non_ref], Va_polar[non_ref], atol=1e-4,
-                               err_msg="Va mismatch between Mat_Mul and element-wise forms")
+                               err_msg="Va mismatch between Mat_Mul module and polar inline")
+
+    shutil.rmtree(test_folder_path)
