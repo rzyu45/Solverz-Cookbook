@@ -12,8 +12,8 @@ Here presents a collection of modelling and numerical solution examples based on
 
    This cookbook is tested against the following dependency versions:
 
-   - **Solverz** >= 0.7.2
-   - **SolMuseum** >= 0.1.4
+   - **Solverz** >= 0.8.0
+   - **SolMuseum** >= 0.1.5
    - **SolUtil** (latest master)
 
 
