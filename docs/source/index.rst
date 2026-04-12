@@ -24,6 +24,8 @@ Examples on Algebraic Equations
 
 :ref:`The Calculation of Electric Power Flow <pf>`
 
+:ref:`District Heating Network Hydraulic Flow <heat_flow>`
+
 Examples on Finite Difference Algebraic Equations
 -------------------------------------------------
 
