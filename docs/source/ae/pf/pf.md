@@ -105,7 +105,35 @@ python bench_pf_matmul_vs_polar.py
 
 It times seven phases end-to-end in a single run, with the module cold-compile phase executed in a fresh subprocess (and with `__pycache__` / Numba `.nbi`/`.nbc` caches wiped beforehand) so the "first-time user" compile cost is measured honestly.
 
-Numbers below are from a 2025 MacBook Air (Apple M4), averaged across two consecutive runs **after the 0.8.1 `SolCF.csc_matvec` hot-F fast path** (see `Mat_Mul` hot-F breakdown below):
+```{note} **Terminology used in this section**
+
+- **SpMV** — *Sparse Matrix-Vector multiplication*, computing $y = M\,x$ with $M$ in a sparse format.
+- **SpMM** — *Sparse Matrix-Matrix multiplication*, computing $C = M\,B$ with $B$ multi-column.
+- **CSC / CSR** — *Compressed Sparse Column* / *Compressed Sparse Row*, the two scipy.sparse storage layouts Solverz consumes.
+- **`@njit`** — Numba's just-in-time compilation decorator. `@njit(cache=True)` saves the compiled code to disk and reuses it across processes.
+- **scatter-add** — an assembly pattern where many indexed reads are accumulated (`+=`) into a fixed output buffer; the mutable-matrix Jacobian kernels are pure scatter-add loops over precomputed index arrays.
+- **fancy indexing** — NumPy / scipy.sparse indexing with arrays of indices, e.g. `M[[r0, r1, r2], [c0, c1, c2]]`.
+- **fast path** — Solverz's code-gen path used for `Mat_Mul(A, x)` where `A` is a plain sparse `dim=2` `Param`: the matvec runs inside `@njit inner_F` via the `SolCF.csc_matvec` Numba helper, with **zero scipy.sparse calls per evaluation**. Mutable-matrix Jacobian blocks have a parallel fast path of typed scatter-add kernels.
+- **fallback path** — the slower-but-correct path used when a `Mat_Mul` placeholder or a Jacobian block doesn't fit the fast-path shape (negated matrices, nested `Mat_Mul`, dense `dim=2`, matrix expressions). The wrapper falls back to `scipy.sparse @` and (for Jacobian blocks) fancy indexing into a freshly-built sparse matrix. **Both paths co-exist**; the runtime picks per placeholder / per block based on what the symbolic classifier recognised at code-gen time.
+- **lambdify** — SymPy's symbolic-to-callable converter. Solverz's "inline" mode uses it to turn each equation's symbolic expression into a Python function on every call (no JIT).
+- **hot F / hot J** — steady-state per-call wall-clock time for `F_(y, p)` / `J_(y, p)` after warm-up. Distinguished from **cold compile** (the first call into a freshly-rendered module, which pays the Numba `@njit` compile cost for every decorated helper).
+- **LICM** — *Loop-Invariant Code Motion*, an LLVM optimisation pass that hoists computations out of inner loops when their inputs do not change inside the loop.
+
+The same terms (with longer definitions) appear in the {ref}`Solverz Matrix-Vector Calculus glossary <matrix-calculus-glossary>`.
+```
+
+### Benchmark environment
+
+All numbers below were measured under:
+
+- **Hardware:** 2025 MacBook Air, Apple M4, AC power, no thermal throttling observed during the runs.
+- **OS:** macOS 26.4 (build 25E246).
+- **Python:** 3.11.13.
+- **Library versions:** `numpy==2.3.3`, `scipy==1.16.0`, `numba==0.65.0`, `sympy==1.13.3`, **`Solverz==0.8.1`** (the post-`csc_matvec` fast path) or later.
+- **Methodology:** for each per-call number, 10 warm-up calls (to bake the Numba caches and prime the CPU branch predictor) followed by 5000–20000 timed iterations, median of three repeats. The cold-compile measurement is run in a fresh Python subprocess with `__pycache__` and Numba `.nbi`/`.nbc` caches wiped beforehand.
+- **Reproduce:** `cd docs/source/ae/pf/src && python bench_pf_matmul_vs_polar.py` — same script the numbers were captured from.
+
+Numbers below are averaged across two consecutive runs **after the 0.8.1 `SolCF.csc_matvec` hot-F fast path** (see `Mat_Mul` hot-F breakdown below):
 
 | Phase                                         |      for-loop (polar) |       Mat_Mul (rect.) | Mat_Mul wins by |
 | :-------------------------------------------- | --------------------: | --------------------: | --------------: |
@@ -183,7 +211,7 @@ The 2 µs gap is usually invisible next to the J call (~55 µs) and the linear s
 
 1. **You iterate on the model.** Compile-time savings are paid on every rebuild. A 47 s vs 2.7 s cold compile is the difference between a usable and an unusable interactive workflow.
 2. **The network is larger than a toy example.** For networks with more than ~60 unknowns the SpMV dispatch cost is amortised over more arithmetic and Mat_Mul's hot F catches up to or passes the for-loop form. At case118+ scale the 2.9× regression on case30 is already gone.
-3. **Your workload includes at least one Jacobian call per F call.** `J` dominates per-Newton-step cost (~55 µs on case30 for both paths), so a 2 µs hot-F regression is invisible at the Newton-step level. This matches ~all production power-flow and DHS workloads.
+3. **Your workload includes at least one Jacobian call per F call.** `J` dominates per-`J_(y, p)` call cost (~55 µs on case30 for both paths), so a 2 µs hot-F regression is invisible relative to one full F+J pair. This matches every power-flow workload (Newton-Raphson `nr_method`, SICNM) and the implicit-step inner loop of DHS quasi-dynamic energy-flow integrators — anything that needs a Jacobian per step.
 4. **You want compact, paper-faithful equations.** `Mat_Mul(G, e)` replaces `nb` scalar `Eqn`s and the matrix-calculus engine derives the Jacobian automatically.
 
 **Consider the for-loop form when all of these hold**:
