@@ -1,7 +1,9 @@
 import os
+import shutil
+import sys
 
 import numpy as np
-from Solverz import Eqn, Model, Opt, Rodas, TimeSeriesParam, Var, made_numerical
+from Solverz import Eqn, Model, Opt, Rodas, TimeSeriesParam, Var, made_numerical, module_printer
 from SolMuseum.ae import eb, eps_network, p2g
 from SolMuseum.dae import gas_network, gt, heat_network, pv, st
 from SolUtil import DhsFlow, GasFlow, PowerFlow
@@ -10,7 +12,17 @@ DX = 100
 QBASE = 37.41
 
 
-def test_ies(datadir):
+def _build_ies_model(datadir):
+    """Assemble the full IES model (eps + gt + st + pv + eb + p2g +
+    gas_network + heat_network + device coupling Eqns). Returns the
+    ``Model`` instance ready to be handed to ``create_instance()``.
+
+    Shared between ``test_ies`` (inline ``made_numerical``) and
+    ``test_ies_module`` (``module_printer(jit=True)``) so that both
+    paths start from bit-identical symbolic equations and any
+    divergence in the integrated trajectory points at a codegen
+    difference rather than a model-building difference.
+    """
     POWER_CASE = str(datadir / "caseI.xlsx")
     HEAT_CASE = str(datadir / "case_heat.xlsx")
 
@@ -147,9 +159,15 @@ def test_ies(datadir):
     model.omega_coi = Var("omega_coi", 1)
     model.eqn_omega_coi = Eqn("eqn_omega_coi", model.omega_coi - omega_coi)
 
-    sdae, y0 = model.create_instance()
-    dae = made_numerical(sdae, y0, sparse=True)
+    return model
 
+
+def _run_and_assert(dae, y0, datadir):
+    """Drive ``dae`` through the two-phase Rodas integration used by
+    every IES test (100 hr settle → 300 s TimeSeriesParam kick) and
+    assert the ``qfuel_gt`` trajectory matches the pre-recorded
+    benchmark in ``datadir``.
+    """
     sol0 = Rodas(dae, [0, 100 * 3600], y0, Opt(pbar=True))
 
     dae.p["fs_0"] = TimeSeriesParam(
@@ -172,3 +190,44 @@ def test_ies(datadir):
 
     np.testing.assert_allclose(time, time_bench, rtol=1e-8, atol=1e-10)
     np.testing.assert_allclose(qfuel, qfuel_bench, rtol=1e-4, atol=1e-5)
+
+
+def test_ies(datadir):
+    """Inline ``made_numerical`` path — the original IES smoke test.
+    Exercises the F/J code gen in pure Python mode with numba never
+    touching the generated source.
+    """
+    model = _build_ies_model(datadir)
+    sdae, y0 = model.create_instance()
+    dae = made_numerical(sdae, y0, sparse=True)
+    _run_and_assert(dae, y0, datadir)
+
+
+def test_ies_module(datadir, tmp_path):
+    """``module_printer(jit=True)`` path — renders the full IES model
+    to a Python module, compiles it via ``@njit``, imports it, and
+    runs the same two-phase Rodas integration. Validates that every
+    LoopEqn block (``eps_network``, future heat/gas LoopEqn ports)
+    survives the JIT round-trip — cold-cache compile time is also
+    the most direct measure of Phase 1 gains.
+    """
+    model = _build_ies_model(datadir)
+    sdae, y0 = model.create_instance()
+
+    module_name = 'ies_jit_mdl'
+    out_dir = str(tmp_path)
+    printer = module_printer(sdae, y0, module_name,
+                              directory=out_dir, jit=True)
+    printer.render()
+
+    sys.path.insert(0, out_dir)
+    try:
+        mod = __import__(module_name)
+        dae = mod.mdl
+        y0_loaded = mod.y
+        _run_and_assert(dae, y0_loaded, datadir)
+    finally:
+        sys.path.remove(out_dir)
+        for k in list(sys.modules):
+            if k == module_name or k.startswith(module_name + '.'):
+                del sys.modules[k]
