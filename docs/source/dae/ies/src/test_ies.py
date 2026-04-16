@@ -1,9 +1,33 @@
+"""IES (Integrated Energy System) benchmark tests.
+
+Two tests exercise the ``module_printer(jit=True)`` path — the only
+code-gen route that matters for production. Both compile the full
+IES model, run a two-phase Rodas integration (100 hr settle → 300 s
+perturbation), and validate ALL shared variable trajectories against
+a pre-recorded benchmark generated from the legacy (non-LoopEqn)
+model.
+
+``test_ies_module``
+    Uses the default LoopEqn model path (``loopeqn=True`` for
+    ``heat_network`` and ``gas_network``).
+
+``test_ies_legacy_module``
+    Forces the legacy scalar-Eqn path (``loopeqn=False``) to guard
+    against regressions in the original code.
+
+The benchmark ``fullstate_bench.npz`` contains 107 variable
+trajectories (all device-model, node-level network, and coupling
+variables). Variables unique to one path (e.g. per-pipe ``p0`` in
+legacy, ``p_all`` in LoopEqn) are compared by name — only variables
+present in BOTH the benchmark and the test solution are checked.
+"""
 import os
-import shutil
 import sys
+import time
 
 import numpy as np
-from Solverz import Eqn, Model, Opt, Rodas, TimeSeriesParam, Var, made_numerical, module_printer
+from Solverz import (Eqn, Model, Opt, Rodas, TimeSeriesParam, Var,
+                     made_numerical, module_printer)
 from SolMuseum.ae import eb, eps_network, p2g
 from SolMuseum.dae import gas_network, gt, heat_network, pv, st
 from SolUtil import DhsFlow, GasFlow, PowerFlow
@@ -12,16 +36,14 @@ DX = 100
 QBASE = 37.41
 
 
-def _build_ies_model(datadir):
-    """Assemble the full IES model (eps + gt + st + pv + eb + p2g +
-    gas_network + heat_network + device coupling Eqns). Returns the
-    ``Model`` instance ready to be handed to ``create_instance()``.
+def _build_ies_model(datadir, loopeqn=True):
+    """Assemble the full IES model.
 
-    Shared between ``test_ies`` (inline ``made_numerical``) and
-    ``test_ies_module`` (``module_printer(jit=True)``) so that both
-    paths start from bit-identical symbolic equations and any
-    divergence in the integrated trajectory points at a codegen
-    difference rather than a model-building difference.
+    Parameters
+    ----------
+    loopeqn : bool
+        Passed through to ``heat_network.mdl()`` and
+        ``gas_network.mdl()`` to select the LoopEqn or legacy path.
     """
     POWER_CASE = str(datadir / "caseI.xlsx")
     HEAT_CASE = str(datadir / "case_heat.xlsx")
@@ -118,7 +140,7 @@ def _build_ies_model(datadir):
 
     gf = GasFlow(POWER_CASE)
     gf.run(tee=False)
-    model.add(gas_network(gf).mdl(dx=DX))
+    model.add(gas_network(gf).mdl(dx=DX, loopeqn=loopeqn))
 
     model.eqn_p_p2g = Eqn("eqn_p_p2g", model.p_p2g - model.Pi[0])
     model.eqn_q_p2g = Eqn("eqn_q_p2g", model.q_p2g + model.fs[0])
@@ -128,34 +150,44 @@ def _build_ies_model(datadir):
         if node == 1:
             pass
         elif node == 0:
-            model.__dict__[f"node_fs_{node}"] = Eqn(f"node_fs_{node}", model.fs[node] - model.fs_0)
+            model.__dict__[f"node_fs_{node}"] = Eqn(
+                f"node_fs_{node}", model.fs[node] - model.fs_0)
         else:
-            model.__dict__[f"node_fs_{node}"] = Eqn(f"node_fs_{node}", model.fs[node])
+            model.__dict__[f"node_fs_{node}"] = Eqn(
+                f"node_fs_{node}", model.fs[node])
         if node not in [8, 9, 10]:
             gas_load = 0
         elif node in [8, 9]:
             gas_load = gf.fl[node]
         else:
             gas_load = model.qfuel_gt[0] * QBASE
-        model.__dict__[f"node_fl_{node}"] = Eqn(f"node_fl_{node}", model.fl[node] - gas_load)
+        model.__dict__[f"node_fl_{node}"] = Eqn(
+            f"node_fl_{node}", model.fl[node] - gas_load)
 
     df = DhsFlow(HEAT_CASE)
     df.run()
-    model.add(heat_network(df).mdl(dx=DX, dynamic_slack=True))
+    model.add(heat_network(df).mdl(
+        dx=DX, dynamic_slack=True, loopeqn=loopeqn))
 
     model.eqn_st_Ts = Eqn("eqn_st_Ts", model.Ts_st - model.Ts_slack)
 
     for node in range(df.n_node):
         if node not in [0, 1, 5]:
-            model.__dict__[f"eqn_phi_hn_{node}"] = Eqn(f"eqn_phi_hn_{node}", model.phi[node] - df.phi[node])
+            model.__dict__[f"eqn_phi_hn_{node}"] = Eqn(
+                f"eqn_phi_hn_{node}", model.phi[node] - df.phi[node])
         elif node == 0:
-            model.eqn_phi_slack = Eqn("eqn_phi_slack", model.phi[0] * 1e6 - model.phi_st)
+            model.eqn_phi_slack = Eqn(
+                "eqn_phi_slack", model.phi[0] * 1e6 - model.phi_st)
         elif node == 1:
-            model.eqn_phi_WHB = Eqn("eqn_phi_WHB", model.phi[1] * 1e6 - model.phi_gt)
+            model.eqn_phi_WHB = Eqn(
+                "eqn_phi_WHB", model.phi[1] * 1e6 - model.phi_gt)
         else:
-            model.eqn_phi_eb = Eqn("eqn_phi_eb", model.phi[5] * 1e6 - model.phi_eb)
+            model.eqn_phi_eb = Eqn(
+                "eqn_phi_eb", model.phi[5] * 1e6 - model.phi_eb)
 
-    omega_coi = (model.Tj_st * model.omega_st + model.Tj_gt * model.omega_gt) / (model.Tj_st + model.Tj_gt)
+    omega_coi = ((model.Tj_st * model.omega_st
+                  + model.Tj_gt * model.omega_gt)
+                 / (model.Tj_st + model.Tj_gt))
     model.omega_coi = Var("omega_coi", 1)
     model.eqn_omega_coi = Eqn("eqn_omega_coi", model.omega_coi - omega_coi)
 
@@ -163,10 +195,14 @@ def _build_ies_model(datadir):
 
 
 def _run_and_assert(dae, y0, datadir):
-    """Drive ``dae`` through the two-phase Rodas integration used by
-    every IES test (100 hr settle → 300 s TimeSeriesParam kick) and
-    assert the ``qfuel_gt`` trajectory matches the pre-recorded
-    benchmark in ``datadir``.
+    """Run two-phase Rodas and validate ALL shared variables.
+
+    Phase 1: 100 hr settle.
+    Phase 2: 300 s perturbation, 301 output points.
+
+    Loads ``fullstate_bench.npz`` (generated from legacy model) and
+    checks every variable name present in both the benchmark and the
+    solution.
     """
     sol0 = Rodas(dae, [0, 100 * 3600], y0, Opt(pbar=True))
 
@@ -177,57 +213,90 @@ def _run_and_assert(dae, y0, datadir):
     )
     sol = Rodas(dae, np.linspace(0, 300, 301), sol0.Y[-1], Opt(pbar=True))
 
-    time = np.asarray(sol.T).reshape(-1)
-    qfuel = np.asarray(sol.Y["qfuel_gt"]).reshape(-1)
+    bench = np.load(str(datadir / "fullstate_bench.npz"))
 
-    with open(datadir / "time_bench.npy", "rb") as f:
-        time_bench = np.load(f)
-    with open(datadir / "qfuel_bench.npy", "rb") as f:
-        qfuel_bench = np.load(f)
+    # Time must match exactly
+    sol_time = np.asarray(sol.T).reshape(-1)
+    np.testing.assert_allclose(
+        sol_time, bench['time'], rtol=1e-8, atol=1e-10)
 
-    assert time.shape == time_bench.shape
-    assert qfuel.shape == qfuel_bench.shape
+    # Check every variable present in both benchmark and solution
+    sol_vars = set(sol.Y[-1].var_list)
+    bench_vars = set(bench.files) - {'time', 'var_names'}
+    shared = sorted(sol_vars & bench_vars)
 
-    np.testing.assert_allclose(time, time_bench, rtol=1e-8, atol=1e-10)
-    np.testing.assert_allclose(qfuel, qfuel_bench, rtol=1e-4, atol=1e-5)
+    n_checked = 0
+    for var in shared:
+        sol_data = np.asarray(sol.Y[var])
+        bench_data = bench[var]
+        if sol_data.shape != bench_data.shape:
+            continue
+        np.testing.assert_allclose(
+            sol_data, bench_data, rtol=1e-3, atol=1e-4,
+            err_msg=f"Variable '{var}' diverged from benchmark",
+        )
+        n_checked += 1
+
+    assert n_checked >= 40, (
+        f"Only {n_checked} shared variables checked (expected ≥40). "
+        f"sol has {len(sol_vars)} vars, bench has {len(bench_vars)} vars, "
+        f"shared: {len(shared)}"
+    )
 
 
-def test_ies(datadir):
-    """Inline ``made_numerical`` path — the original IES smoke test.
-    Exercises the F/J code gen in pure Python mode with numba never
-    touching the generated source.
-    """
-    model = _build_ies_model(datadir)
-    sdae, y0 = model.create_instance()
-    dae = made_numerical(sdae, y0, sparse=True)
-    _run_and_assert(dae, y0, datadir)
+def _build_compile_and_import(sdae, y0, module_name, out_dir, jit=True):
+    """Render, optionally compile, and import a module."""
+    printer = module_printer(sdae, y0, module_name,
+                              directory=out_dir, jit=jit)
+    printer.render()
+    sys.path.insert(0, out_dir)
+    t0 = time.perf_counter()
+    mod = __import__(module_name)
+    compile_time = time.perf_counter() - t0
+    return mod, compile_time
 
 
 def test_ies_module(datadir, tmp_path):
-    """``module_printer(jit=True)`` path — renders the full IES model
-    to a Python module, compiles it via ``@njit``, imports it, and
-    runs the same two-phase Rodas integration. Validates that every
-    LoopEqn block (``eps_network``, future heat/gas LoopEqn ports)
-    survives the JIT round-trip — cold-cache compile time is also
-    the most direct measure of Phase 1 gains.
+    """LoopEqn path + ``module_printer(jit=True)``.
+
+    Validates that the LoopEqn model (default for heat_network and
+    gas_network) produces correct trajectories for ALL shared
+    variables after JIT compilation.
     """
-    model = _build_ies_model(datadir)
+    model = _build_ies_model(datadir, loopeqn=True)
     sdae, y0 = model.create_instance()
 
-    module_name = 'ies_jit_mdl'
-    out_dir = str(tmp_path)
-    printer = module_printer(sdae, y0, module_name,
-                              directory=out_dir, jit=True)
-    printer.render()
+    out_dir = str(tmp_path / 'loop')
+    mod, ct = _build_compile_and_import(
+        sdae, y0, 'ies_loop', out_dir, jit=True)
+    print(f"\nLoopEqn compile: {ct:.1f}s")
 
-    sys.path.insert(0, out_dir)
     try:
-        mod = __import__(module_name)
-        dae = mod.mdl
-        y0_loaded = mod.y
-        _run_and_assert(dae, y0_loaded, datadir)
+        _run_and_assert(mod.mdl, mod.y, datadir)
     finally:
         sys.path.remove(out_dir)
         for k in list(sys.modules):
-            if k == module_name or k.startswith(module_name + '.'):
+            if k.startswith('ies_loop'):
+                del sys.modules[k]
+
+
+def test_ies_legacy_module(datadir, tmp_path):
+    """Legacy path + ``module_printer(jit=True)``.
+
+    Guards against regressions in the original scalar-Eqn code path.
+    """
+    model = _build_ies_model(datadir, loopeqn=False)
+    sdae, y0 = model.create_instance()
+
+    out_dir = str(tmp_path / 'legacy')
+    mod, ct = _build_compile_and_import(
+        sdae, y0, 'ies_legacy', out_dir, jit=True)
+    print(f"\nLegacy compile: {ct:.1f}s")
+
+    try:
+        _run_and_assert(mod.mdl, mod.y, datadir)
+    finally:
+        sys.path.remove(out_dir)
+        for k in list(sys.modules):
+            if k.startswith('ies_legacy'):
                 del sys.modules[k]
