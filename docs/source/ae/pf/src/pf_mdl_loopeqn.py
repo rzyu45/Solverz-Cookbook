@@ -18,7 +18,7 @@ from scipy.io import loadmat
 from scipy.sparse import csc_array
 
 from Solverz import Var, Model, sin, cos, Param, module_printer
-from Solverz import Idx, LoopEqn, Sum
+from Solverz import Idx, LoopEqn, Sum, Set
 
 
 def build_loopeqn_pf_model(datadir=None):
@@ -85,78 +85,73 @@ def build_loopeqn_pf_model(datadir=None):
     m.Pd = Param('Pd', Pd)
     m.Qd = Param('Qd', Qd)
 
-    # Int Params carrying the "free bus" index maps.
-    m.pv_pq_idx = Param('pv_pq_idx', pv_pq_arr, dtype=int)
-    m.pq_idx = Param('pq_idx', pq_arr, dtype=int)
+    # Four index sets: the full bus set (``j`` sums), the free-bus
+    # subsets (``pv_pq`` for P balance, ``pq`` for Q balance), and
+    # the pinned-bus subsets (``ref_pv`` for Vm pins, ``ref`` for Va
+    # pins). ``Set`` replaces the ``Param + Idx + m.map[i]`` dance
+    # with a single named object — ``Set.idx(...)`` produces a
+    # bounded sympy.Idx whose uses in the body are transparently
+    # gathered via the set's auxiliary Param.
+    m.Bus = Set('Bus', nb)
+    m.PVPQ = Set('PVPQ', pv_pq_arr)
+    m.PQ = Set('PQ', pq_arr)
+    m.RefPV = Set('RefPV', ref_pv_arr)
+    m.Ref = Set('Ref', ref_arr)
 
-    # Int Params + value Params for the Vm / Va pin LoopEqns below.
-    m.ref_pv_idx = Param('ref_pv_idx', ref_pv_arr, dtype=int)
     m.Vm_pinned = Param('Vm_pinned', Vm_init[ref_pv_arr])
-    m.ref_idx = Param('ref_idx', ref_arr, dtype=int)
     m.Va_pinned = Param('Va_pinned', Va_init[ref_arr])
 
-    # Bounded indices — ``Sum`` and ``LoopEqn`` pick up the range
-    # automatically from the ``.upper`` attribute so there's no need
-    # to repeat the count in each call. We use two separate outer
-    # indices so ``LoopEqn`` can infer distinct ``n_outer`` for the
-    # P and Q equations (``P_eqn`` iterates pv+pq buses, ``Q_eqn``
-    # iterates pq buses only).
-    i_p = Idx('i_p', npvpq)
-    i_q = Idx('i_q', npq)
-    j = Idx('j', nb)
+    i_p = m.PVPQ.idx('i_p')
+    i_q = m.PQ.idx('i_q')
+    j = m.Bus.idx('j')
 
     # Split into separate Sums, one per sparse walker (Case A only —
     # ``_collect_sparse_walkers`` rejects multi-walker Sums).
     body_P = (
-        m.Vm_full[m.pv_pq_idx[i_p]] * Sum(
-            m.Vm_full[j] * m.Gbus[m.pv_pq_idx[i_p], j]
-            * cos(m.Va_full[m.pv_pq_idx[i_p]] - m.Va_full[j]),
+        m.Vm_full[i_p] * Sum(
+            m.Vm_full[j] * m.Gbus[i_p, j]
+            * cos(m.Va_full[i_p] - m.Va_full[j]),
             j,
         )
-        + m.Vm_full[m.pv_pq_idx[i_p]] * Sum(
-            m.Vm_full[j] * m.Bbus[m.pv_pq_idx[i_p], j]
-            * sin(m.Va_full[m.pv_pq_idx[i_p]] - m.Va_full[j]),
+        + m.Vm_full[i_p] * Sum(
+            m.Vm_full[j] * m.Bbus[i_p, j]
+            * sin(m.Va_full[i_p] - m.Va_full[j]),
             j,
         )
-        + m.Pd[m.pv_pq_idx[i_p]] - m.Pg[m.pv_pq_idx[i_p]]
+        + m.Pd[i_p] - m.Pg[i_p]
     )
     m.P_eqn = LoopEqn('P_eqn', outer_index=i_p, body=body_P, model=m)
 
     body_Q = (
-        m.Vm_full[m.pq_idx[i_q]] * Sum(
-            m.Vm_full[j] * m.Gbus[m.pq_idx[i_q], j]
-            * sin(m.Va_full[m.pq_idx[i_q]] - m.Va_full[j]),
+        m.Vm_full[i_q] * Sum(
+            m.Vm_full[j] * m.Gbus[i_q, j]
+            * sin(m.Va_full[i_q] - m.Va_full[j]),
             j,
         )
-        - m.Vm_full[m.pq_idx[i_q]] * Sum(
-            m.Vm_full[j] * m.Bbus[m.pq_idx[i_q], j]
-            * cos(m.Va_full[m.pq_idx[i_q]] - m.Va_full[j]),
+        - m.Vm_full[i_q] * Sum(
+            m.Vm_full[j] * m.Bbus[i_q, j]
+            * cos(m.Va_full[i_q] - m.Va_full[j]),
             j,
         )
-        + m.Qd[m.pq_idx[i_q]] - m.Qg[m.pq_idx[i_q]]
+        + m.Qd[i_q] - m.Qg[i_q]
     )
     m.Q_eqn = LoopEqn('Q_eqn', outer_index=i_q, body=body_Q, model=m)
 
     # Pin ref+pv buses' Vm and ref buses' Va to their known values
-    # via two tiny LoopEqns instead of per-index scalar ``Eqn``s.
-    # The ``Vm_pin`` body uses an indirect-outer indexing pattern
-    # (``Vm_full[ref_pv_idx[i_vp]]``) which the Phase J indirect
-    # walker handles: F = Vm_full[ref_pv_idx[i_vp]] - Vm_pinned[i_vp];
-    # derivative wrt Vm_full is a ``δ(ref_pv_idx[i_vp], k)`` sparsity
-    # pattern that the J-side analyzer recognises as indirect diag.
-    nref_pv = len(ref_pv_arr)
-    nref = len(ref_arr)
-    i_vp = Idx('i_vp', nref_pv)
-    i_vr = Idx('i_vr', nref)
+    # via two tiny LoopEqns over the ``RefPV`` / ``Ref`` sets. The
+    # body uses the set-tagged ``Idx`` directly; the rewriter
+    # inserts the gather to the underlying bus index automatically.
+    i_vp = m.RefPV.idx('i_vp')
+    i_vr = m.Ref.idx('i_vr')
 
     m.Vm_pin = LoopEqn(
         'Vm_pin', outer_index=i_vp,
-        body=m.Vm_full[m.ref_pv_idx[i_vp]] - m.Vm_pinned[i_vp],
+        body=m.Vm_full[i_vp] - m.Vm_pinned[i_vp],
         model=m,
     )
     m.Va_pin = LoopEqn(
         'Va_pin', outer_index=i_vr,
-        body=m.Va_full[m.ref_idx[i_vr]] - m.Va_pinned[i_vr],
+        body=m.Va_full[i_vr] - m.Va_pinned[i_vr],
         model=m,
     )
 
