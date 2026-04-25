@@ -22,10 +22,7 @@ for j in range(5):
     for i in range(X.shape[0]):
         ae.p['x1'] = X[i]
         if t_range[j] < tshock:
-            # Pre-shock single root; seed Newton with the t=0
-            # characteristic origin so convergence does not depend
-            # on the previous (i, j) iterate.
-            y0['x'] = X[i]
+            y0['x'] = X[i]   # initial guess for Newton
             sol = nr_method(ae, y0, opt)
             U[i, j] = -np.sin(np.pi * sol.y['x'])[0]
         else:
