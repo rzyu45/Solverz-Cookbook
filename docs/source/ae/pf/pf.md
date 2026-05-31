@@ -94,6 +94,19 @@ Starting from a flat start ($e=1$, $f=0$), the Newton-Raphson method converges i
 The `Mat_Mul` formulation is much more compact than the for-loop approach — the entire power flow model is defined in just a few lines. The Jacobian is computed automatically by the matrix calculus engine, eliminating the need for manual derivation.
 ```
 
+## Compact polar power flow with `LoopEqn`
+
+The for-loop polar form emits one scalar `Eqn` per bus, so a model with `nb` buses generates `nb` `inner_F` kernels and hundreds of per-non-zero Jacobian kernels. Since version 0.9.0, the same polar equations can be written as a small number of `LoopEqn` blocks over a flat, full-bus `Vm` / `Va` state, keeping the readable polar formulation while collapsing the code-generation explosion.
+
+The idea is to iterate the active-power balance over the pv+pq buses and the reactive-power balance over the pq buses with two `LoopEqn`s, and to pin the ref+pv voltage magnitudes and ref voltage angles to their setpoints with two further `LoopEqn`s. The inner $\sum_k$ over all buses reads the sparse conductance / susceptance rows directly, so each `LoopEqn` compiles to a single vector kernel:
+
+```{literalinclude} src/pf_mdl_loopeqn.py
+```
+
+The four index sets are declared with the `Set` primitive: `Bus` for the inner sum, `PVPQ` / `PQ` for the free buses, and `RefPV` / `Ref` for the pinned buses. `Set.idx(...)` produces a bounded index whose uses in the body are gathered to the underlying bus index automatically, so `m.Vm_full[i_p]` and `m.Gbus[i_p, j]` resolve to the correct rows without a manual index map.
+
+The LoopEqn form is algebraically identical to the per-bus scalar form, so the two converge to the same solution. The cross-check in [`src/verify_loopeqn_pf.py`](src/verify_loopeqn_pf.py) confirms the complex bus voltages agree to better than `1e-6` relative error. Its main advantage is compile time: like `Mat_Mul`, it emits a handful of vector kernels instead of `O(nb)` scalar ones, so `module_printer` cold-compile scales with the number of equation *blocks* rather than the number of buses. The same `LoopEqn` polar formulation is now the default in `SolUtil.PowerFlow`.
+
 ## Performance comparison: `Mat_Mul` vs. for-loop
 
 The two formulations above model the same physical system (`case30`) but pay very different costs at different phases of the workflow. The benchmark script is in [`src/bench_pf_matmul_vs_polar.py`](src/bench_pf_matmul_vs_polar.py) and can be re-run on any hardware:
