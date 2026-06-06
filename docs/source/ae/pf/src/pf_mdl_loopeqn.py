@@ -8,8 +8,9 @@ sub-function in the generated module is therefore either a LoopEqn
 kernel or the F_/J_ wrapper — there are no per-scalar
 ``inner_F<N>``'s emitted for the pin equations.
 
-This module is used by ``bench_pf_loopeqn_vs_legacy.py`` to measure the
-cold-cache module_printer compile-time delta.
+This module is used by ``bench_pf_loopeqn_vs_polar.py`` to measure the
+modelling / compile / runtime delta against the traditional for-loop
+formulation in ``pf_mdl.py``.
 """
 import os
 
