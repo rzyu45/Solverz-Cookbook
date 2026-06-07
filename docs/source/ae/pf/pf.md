@@ -260,6 +260,86 @@ Every `Mat_Mul(A, v)` placeholder is classified at code-gen time. A placeholder 
 The cold-compile cost for the for-loop form (~47 s on M4) matches the "hundreds of seconds" figure quoted for the older Ryzen 5800H laptop earlier in this chapter. The *absolute* number is sensitive to CPU single-thread performance, but the **ratio** between the two formulations (≈17×) is driven almost entirely by the number of `@njit` kernels the code generator emits, which is a property of the formulation, not the hardware.
 ```
 
+## Compact polar power flow with `LoopEqn`
+
+The `Mat_Mul` formulation above removes the for-loops by switching to rectangular ($e$, $f$) coordinates. Since version 0.9.0, Solverz offers a second way to remove the for-loops that **keeps the polar trigonometric formulation intact**: the `LoopEqn` template. Instead of writing one scalar `Eqn` per bus inside a Python `for` loop, we declare a single symbolic loop whose outer index ranges over a `Set` of buses and whose body sums over the neighbour `Set`:
+
+```{math}
+\left\{
+\begin{aligned}
+&P_h:\quad v_h\sum_{k}v_k\,g_{hk}\cos\theta_{hk}+v_h\sum_{k}v_k\,b_{hk}\sin\theta_{hk}+p^d_h-p^g_h=0,\quad h\in\mathbb{B}_\text{pv,pq}\\
+&Q_h:\quad v_h\sum_{k}v_k\,g_{hk}\sin\theta_{hk}-v_h\sum_{k}v_k\,b_{hk}\cos\theta_{hk}+q^d_h-q^g_h=0,\quad h\in\mathbb{B}_\text{pq}
+\end{aligned}
+\right.
+```
+
+Here the outer index $h$ and the summation index $k$ are *symbolic* loop indices, not Python loop counters. A `Set` names a subset of bus indices; `Set.idx(...)` produces a bounded loop index; `Sum(expr, k)` is the symbolic neighbour sum; and `LoopEqn(name, outer_index=h, body=..., model=m)` expands at code-generation time into a compact loop kernel rather than `nb` unrolled scalar equations. The state is the flat `Vm_full` / `Va_full` over every bus, and two tiny `LoopEqn` pins fix the ref/pv voltages to their known values, squaring the system.
+
+```{literalinclude} src/pf_mdl_loopeqn.py
+```
+
+```{note}
+Each `LoopEqn` body reads like the math it implements. The sparse `Gbus[h, k]` / `Bbus[h, k]` access compiles to a CSR row walk over bus `h`, so the inner `Sum` touches only the actual neighbours of `h` rather than all `nb` buses. See the canonical [LoopEqn walkthrough](https://docs.solverz.org/loopeqn.html) for the full template syntax.
+```
+
+## Performance comparison: `LoopEqn` vs. for-loop
+
+Where the `Mat_Mul` comparison above changes coordinates, this comparison isolates the *loop-expression* cost alone: both models are in the **same polar coordinates** and solve the identical `case30` power flow. The only difference is whether the per-bus summations are unrolled into 53 scalar `Eqn`s by a Python loop ([`src/pf_mdl.py`](src/pf_mdl.py)) or expressed as 4 symbolic `LoopEqn` families ([`src/pf_mdl_loopeqn.py`](src/pf_mdl_loopeqn.py)). The benchmark script is [`src/bench_pf_loopeqn_vs_polar.py`](src/bench_pf_loopeqn_vs_polar.py):
+
+```bash
+cd docs/source/ae/pf/src
+python bench_pf_loopeqn_vs_polar.py
+```
+
+```{note}
+`made_numerical` (the inline lambdify path) does **not** support `LoopEqn` — `LoopEqn` is designed for the Numba-JIT module-printer path. Every phase below is therefore measured on the `module_printer(..., jit=True)` pipeline, which is the production path Solverz recommends anyway.
+```
+
+### Benchmark environment
+
+Measured on the same machine as the `Mat_Mul` comparison: 2025 MacBook Air, Apple M4, macOS 26.5, Python 3.11.13, `numpy==2.3.5`, `scipy==1.16.3`, `numba==0.65.0`, `sympy==1.13.3`, and Solverz 0.9.x (the LoopEqn release). Each per-call number is 10 warm-up calls followed by 2000 timed iterations; the cold-compile measurement runs in a fresh subprocess with `__pycache__` and Numba `.nbi`/`.nbc` caches wiped beforehand. The numbers below are representative medians of three consecutive runs.
+
+| Phase                                            |    for-loop (polar) |     LoopEqn (polar) |  LoopEqn wins by |
+| :----------------------------------------------- | ------------------: | ------------------: | ---------------: |
+| **Modelling** — `Model() → create_instance()`    |            ≈ 1.4 s  |            ≈ 0.09 s |             ~15× |
+| **Compilation** — module render (`jit=True`)      |            ≈ 0.6 s  |           ≈ 0.014 s |             ~43× |
+| **Compilation** — `@njit` kernels emitted         |               416  |                 12 |             ~35× |
+| **Compilation** — module cold import + JIT        |             ≈ 45 s  |            ≈ 2.5 s |             ~18× |
+| **Computation** — module hot **F** (per call)     |           ≈ 1.05 µs |           ≈ 2.35 µs | 0.45× *(loses)* |
+| **Computation** — module hot **J** (per call)     |             ≈ 55 µs |             ≈ 36 µs |             ~1.5× |
+| **Computation** — Newton-Raphson end-to-end       |            ≈ 0.33 ms |           ≈ 0.20 ms |             ~1.6× |
+
+Shapes: the polar for-loop form has **53 unknowns / 53 scalar `Eqn`s** (`Va` at PV+PQ buses, `Vm` at PQ buses); the LoopEqn form has **60 unknowns / 4 equation families** — `Vm_full` and `Va_full` over all 30 buses, with P balance over PV+PQ, Q balance over PQ, and two pin families fixing the ref/pv voltages, for 60 scalar rows.
+
+### Modelling cost
+
+`Model()` construction plus `create_instance()` is **~15× faster** with `LoopEqn` (≈ 0.09 s vs ≈ 1.4 s). The for-loop form materialises 53 fully-expanded scalar trigonometric expressions in Python, each a sum of up to `nb` terms, and `create_instance()` must traverse all of them to build the symbolic IR. The LoopEqn form carries 4 compact loop templates instead, so the symbolic layer never sees the unrolled expansion.
+
+### Compilation cost
+
+This is the headline. `LoopEqn` emits **12** `@njit` kernels where the for-loop form emits **416**, and the cold compile, render, and model-build times all scale with that count:
+
+- **for-loop** — 1 dispatcher `inner_F` + **53** per-bus `inner_F{i}` + 1 dispatcher `inner_J` + **361** per-non-zero `inner_J{k}` = **416** Numba kernels. Each kernel is a cheap scalar expression, but the fixed per-kernel overhead (LLVM instantiation, symbol table, cache write) dominates the ~45 s cold compile.
+- **LoopEqn** — 1 dispatcher `inner_F` + **4** per-family loop kernels (`inner_F0..3`, one per `LoopEqn`) + 1 dispatcher `inner_J` delegating to **4** vectorised `_sz_loop_jac_kernel_N` kernels (each scatters one equation family into precomputed `_sz_loop_jac_row_N` / `_sz_loop_jac_col_N` index arrays) + **2** `_sz_csr_*_point` CSR-lookup helpers = **12** kernels. Cold compile (~2.5 s) is dominated by Numba startup, not per-kernel work.
+
+### Computation cost
+
+At runtime, `LoopEqn` and `Mat_Mul` part ways:
+
+- **Hot F is ~2.2× slower** (≈ 2.35 µs vs ≈ 1.05 µs). The for-loop's 53 scalar `inner_F{i}` bodies are inlined by LLVM into one straight-line `inner_F` — a single Python→Numba crossing with no data-dependent indexing. The LoopEqn `inner_F` runs 4 loop kernels whose inner `Sum` walks the CSR row of bus `h` (`_sz_csr_Gbus_indptr[h] : _sz_csr_Gbus_indptr[h+1]`); the gather indirection plus loop overhead costs the extra ~1.3 µs on `case30`. This is the same structural regression `Mat_Mul` pays on small networks.
+- **Hot J is ~1.5× faster** (≈ 36 µs vs ≈ 55 µs) — the opposite of hot F. The for-loop form dispatches **361 tiny per-non-zero kernels**, each computing one Jacobian entry and paying its own call overhead; LoopEqn assembles the whole Jacobian through **4** vectorised `_sz_loop_jac_kernel_N` kernels, one per equation family. Far fewer, larger kernels win once per-call dispatch dominates, which it does for a several-hundred-entry sparse Jacobian.
+- **Newton-Raphson end-to-end is ~1.6× faster** (≈ 0.20 ms vs ≈ 0.33 ms). Each Newton step is one F + one J + one sparse solve, and J dominates the per-step cost, so the faster J carries the iteration. The step counts differ slightly (2 for LoopEqn, 3 for the for-loop) because the perturbed flat start is parameterised over the full vs the reduced state, so this end-to-end number is indicative rather than a strictly equi-perturbed comparison.
+
+### Which formulation should I use?
+
+`LoopEqn` is the better default for polar power flow whenever you iterate on the model or solve with a Newton method:
+
+1. **You want to stay in polar coordinates.** Unlike `Mat_Mul`, which requires the rectangular $e$/$f$ rewrite, `LoopEqn` keeps the trigonometric formula the textbook uses, so the code reads like the math.
+2. **You rebuild the module.** The ~18× cold-compile and ~43× render savings are paid on every rebuild — the difference between an interactive and an unusable edit loop.
+3. **Your loop calls a Jacobian** (every Newton/NR solve does). The faster J and faster end-to-end NR make `LoopEqn` at least as fast as the for-loop at solve time on `case30`, with the compile-time savings on top.
+
+The one workload where the for-loop form still wins is a hot loop of **pure F evaluations** (no Jacobian) on a small network with the module compiled once and reused for millions of calls — the same narrow case as the `Mat_Mul` regression above.
+
 ## Ill-conditioned Power flow
 
 The Newton method sometimes fails because it is not robust enough. We view this cases as having ill-conditioned initial settings. In this cases, we can use some more robust methods, such as the semi-implicit continuous Newton method (SICNM)[^sicnm] provided by Solverz. Shown below is an illustrative example of ill-conditioned power flow. The Newton failed while the SICNM easily converged. 

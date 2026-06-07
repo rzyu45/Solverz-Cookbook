@@ -1,6 +1,9 @@
 import os
 import sys
 import shutil
+import importlib
+import tempfile
+import uuid
 
 import numpy as np
 from scipy.io import loadmat
@@ -311,3 +314,78 @@ def test_pf_matmul(datadir):
                                err_msg="Va mismatch between Mat_Mul module and polar inline")
 
     shutil.rmtree(test_folder_path)
+
+
+def _render_and_import(spf, y0, prefix):
+    """Render a model via ``module_printer(jit=True)`` into a temp dir and
+    import it. LoopEqn cannot run through the inline ``made_numerical``
+    path (issue #132), so the Numba-JIT module printer is the only route.
+    Returns ``(mdl, y, module_dir)``; the caller may best-effort remove
+    ``module_dir`` afterwards.
+    """
+    mod_name = f"{prefix}_{uuid.uuid4().hex[:8]}"
+    d = tempfile.mkdtemp(prefix="sz_pf_loopeqn_")
+    module_printer(spf, y0, mod_name, directory=d, jit=True).render()
+    sys.path.insert(0, d)
+    mod = importlib.import_module(mod_name)
+    return mod.mdl, mod.y, d
+
+
+def test_pf_loopeqn(datadir):
+    """LoopEqn polar power flow on case30 via the module printer.
+
+    Builds the exact model the cookbook chapter shows
+    (``pf_mdl_loopeqn.py``), renders it with ``module_printer(jit=True)``,
+    perturbs the flat start so Newton-Raphson actually iterates, and
+    cross-validates the recovered complex bus voltage against (a) the
+    MATPOWER reference solution and (b) the element-wise polar form
+    solved inline. The two formulations are algebraically identical, so
+    both comparisons must agree to Newton tolerance.
+    """
+    # Import the doc's LoopEqn model builder from this src directory.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from pf_mdl_loopeqn import build_loopeqn_pf_model
+
+    case = _load_case30(datadir)
+    V = case['V']
+    ref, pv, pq = case['ref'], case['pv'], case['pq']
+
+    m = build_loopeqn_pf_model(datadir=str(datadir))
+    spf, y0 = m.create_instance()
+
+    # 60 unknowns / 4 equation families (P_eqn, Q_eqn, Vm_pin, Va_pin).
+    assert spf.eqn_size == 2 * case['nb']
+    assert len(spf.EQNs) == 4
+
+    mdl, y, module_dir = _render_and_import(spf, y0, "pf_loopeqn")
+    try:
+        # Perturb the (already-converged) flat start so NR iterates.
+        y_run = type(y)(y.a, y.array.copy())
+        y_run['Vm_full'] = y_run['Vm_full'] + 0.03
+        y_run['Va_full'] = y_run['Va_full'] + 0.02
+        sol = nr_method(mdl, y_run)
+        assert sol.stats.succeed, "LoopEqn Newton-Raphson did not converge"
+
+        Vm_loop = np.asarray(sol.y['Vm_full']).ravel()
+        Va_loop = np.asarray(sol.y['Va_full']).ravel()
+        V_loop = Vm_loop * np.exp(1j * Va_loop)
+
+        # (a) vs. MATPOWER reference complex voltage.
+        np.testing.assert_allclose(V_loop, V, atol=1e-6, rtol=1e-6,
+                                   err_msg="LoopEqn solution disagrees with reference V")
+
+        # (b) vs. element-wise polar form solved inline.
+        m_polar = _build_polar_model(case)
+        spf_polar, y0_polar = m_polar.create_instance()
+        mdl_polar = made_numerical(spf_polar, y0_polar, sparse=True)
+        sol_polar = nr_method(mdl_polar, y0_polar)
+        Vm_polar = np.abs(V).copy()
+        Va_polar = np.angle(V).copy()
+        Va_polar[pv + pq] = sol_polar.y['Va']
+        Vm_polar[pq] = sol_polar.y['Vm']
+        V_polar = Vm_polar * np.exp(1j * Va_polar)
+
+        np.testing.assert_allclose(V_loop, V_polar, atol=1e-5, rtol=1e-5,
+                                   err_msg="LoopEqn module disagrees with polar inline")
+    finally:
+        shutil.rmtree(module_dir, ignore_errors=True)
