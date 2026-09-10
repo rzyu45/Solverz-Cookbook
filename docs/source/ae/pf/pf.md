@@ -58,7 +58,7 @@ We show the computation overhead between two `jit` settings using the following 
 
 ![omega](fig/time_prof_01.png)
 
-On a laptop equipped with Ryzen 5800H CPU, it took hundreds of seconds to compile the module `powerflow`. However, the post-compiled `F` and `J` function evaluations were one magnitude faster than those without jit-compilation. 
+Compiling the module `powerflow` takes 122 s on an Apple M4, because this model renders one Numba kernel per scalar equation and per Jacobian entry and `make_hvp=True` adds the Hessian-vector-product kernels on top. What the compilation buys is large: a steady-state `F` evaluation takes 1.25 us against 184 us without jit, and a `J` evaluation 37 us against 792 us, so `F` is 147 times faster and `J` 21 times faster. Both figures come from `src/time_prof.py`, which renders the two modules, times the first import of the jit one in a fresh interpreter, and reports the median of 2000 calls after a warm-up. 
 
 The compiled results are cached locally, so that only one compilation is required for each model. We recommend that one debug one's models without jit and compile the models in efficiency-demanding cases.
 
@@ -140,34 +140,34 @@ The same terms (with longer definitions) appear in the {ref}`Solverz Matrix-Vect
 All numbers below were measured under:
 
 - **Hardware:** 2025 MacBook Air, Apple M4, AC power, no thermal throttling observed during the runs.
-- **OS:** macOS 26.4 (build 25E246).
+- **OS:** macOS 26.6.2.
 - **Python:** 3.11.13.
-- **Library versions:** `numpy==2.3.3`, `scipy==1.16.0`, `numba==0.65.0`, `sympy==1.13.3`, **`Solverz==0.8.1`** (the post-`csc_matvec` fast path) or later.
+- **Library versions:** `numpy==2.3.5`, `scipy==1.16.3`, `numba==0.65.0`, `sympy==1.13.3`, **`Solverz==0.11.0`**.
 - **Methodology:** for each per-call number, 10 warm-up calls (to bake the Numba caches and prime the CPU branch predictor) followed by 5000–20000 timed iterations, median of three repeats. The cold-compile measurement is run in a fresh Python subprocess with `__pycache__` and Numba `.nbi`/`.nbc` caches wiped beforehand.
 - **Reproduce:** `cd docs/source/ae/pf/src && python bench_pf_matmul_vs_polar.py` — same script the numbers were captured from.
 
-Numbers below are averaged across two consecutive runs **after the 0.8.1 `SolCF.csc_matvec` hot-F fast path** (see `Mat_Mul` hot-F breakdown below):
+Numbers below were re-measured on Solverz 0.11.0. The `Mat_Mul` hot-F breakdown further down explains the one row where the for-loop form still wins:
 
 | Phase                                         |      for-loop (polar) |       Mat_Mul (rect.) | Mat_Mul wins by |
 | :-------------------------------------------- | --------------------: | --------------------: | --------------: |
-| 1. `Model() → create_instance()`              |              ≈ 2.0 s  |              ≈ 0.07 s |           ~28× |
-| 2. `FormJac(y0)`                              |              ≈ 0.05 s |             ≈ 0.006 s |            ~9× |
-| 3. Inline compile (`made_numerical`)          |             ≈ 0.27 s  |              ≈ 0.01 s |           ~27× |
-| 4. Inline hot **F** (per call)                |              ≈ 165 µs |               ≈ 17 µs |           ~10× |
-| 4. Inline hot **J** (per call)                |              ≈ 820 µs |              ≈ 285 µs |            ~3× |
-| 5. Module render (`module_printer.render`)    |             ≈ 0.53 s  |              ≈ 0.02 s |           ~33× |
-| 6. **Module cold compile** (import + Numba)   |            **≈ 47 s** |            **≈ 2.7 s**|           ~17× |
-| 7. Module hot **F** (per call)                |           **≈ 1.1 µs** |          **≈ 3.2 µs** |  0.34× *(loses)* |
-| 7. Module hot **J** (per call)                |               ≈ 59 µs |               ≈ 57 µs |          ~1.0× |
+| 1. `Model() → create_instance()`              |             ≈ 2.05 s  |             ≈ 0.064 s |           ~32× |
+| 2. `FormJac(y0)`                              |             ≈ 0.049 s |             ≈ 0.006 s |            ~8× |
+| 3. Inline compile (`made_numerical`)          |             ≈ 0.30 s  |             ≈ 0.010 s |           ~30× |
+| 4. Inline hot **F** (per call)                |              ≈ 186 µs |              ≈ 18 µs  |           ~10× |
+| 4. Inline hot **J** (per call)                |              ≈ 880 µs |              ≈ 271 µs |            ~3× |
+| 5. Module render (`module_printer.render`)    |             ≈ 0.58 s  |             ≈ 0.016 s |           ~36× |
+| 6. **Module cold compile** (import + Numba)   |            **≈ 49 s** |            **≈ 2.8 s**|           ~18× |
+| 7. Module hot **F** (per call)                |           **≈ 1.4 µs** |          **≈ 3.3 µs** |  0.43× *(loses)* |
+| 7. Module hot **J** (per call)                |            **≈ 48 µs** |           **≈ 36 µs** |          ~1.3× |
 
 Shapes: the polar form has **53 unknowns / 53 scalar `Eqn`s** (`Va` at PV+PQ buses, `Vm` at PQ buses); the `Mat_Mul` form has **58 unknowns / 3 vector `Eqn`s** (`e`, `f` at non-ref buses, with P balance + Q balance + V² at PV). The comparison is not strictly equi-dimensional but close enough that the differences are driven by the formulation, not the unknown count.
 
 ### Compile-time cost
 
-**`Mat_Mul` compiles ~17× faster on a cold import.** This is the headline number and scales directly with the number of `@njit` functions the code generator emits:
+**`Mat_Mul` compiles ~18× faster on a cold import.** This is the headline number and scales directly with the number of `@njit` functions the code generator emits:
 
-- **for-loop (polar)** — 1 dispatcher `inner_F` + **53** per-equation `inner_F{i}` + 1 dispatcher `inner_J` + **361** per-non-zero `inner_J{k}`. That's **~416 Numba kernels** to compile on the first run, each one a scalar trig expression. Each individual kernel is cheap to compile but the fixed overhead per kernel (LLVM instantiation, symbol table, cache write) adds up to ~47 seconds.
-- **`Mat_Mul` (rectangular)** — 1 dispatcher `inner_F` + **3** per-vector-equation `inner_F{i}` + 1 dispatcher `inner_J` + a handful of per-block `inner_J{k}` + **4** per-mutable-matrix-block `_mut_block_N` scatter-add kernels. Total: ~10 kernels. Cold compile is dominated by import + Numba startup (~2 s) rather than by per-kernel compilation.
+- **for-loop (polar)** — 1 dispatcher `inner_F` + **53** per-equation `inner_F{i}` + 1 dispatcher `inner_J` + **361** per-non-zero `inner_J{k}`. That's **~416 Numba kernels** to compile on the first run, each one a scalar trig expression. Each individual kernel is cheap to compile but the fixed overhead per kernel (LLVM instantiation, symbol table, cache write) adds up to ~49 seconds.
+- **`Mat_Mul` (rectangular)** — 1 dispatcher `inner_F` + **3** per-vector-equation `inner_F{i}` + 1 dispatcher `inner_J` + a handful of per-block `inner_J{k}` + **4** per-mutable-matrix-block `_mut_block_N` scatter-add kernels. Total: ~10 kernels. Cold compile is dominated by import + Numba startup, roughly 2.8 s, rather than by per-kernel compilation.
 
 Every earlier phase (model construction, `FormJac`, `made_numerical`, `render`) follows the same 20–40× scaling, because they all traverse the same explosion of scalar equations.
 
@@ -213,18 +213,18 @@ Even after the fast path, case30 hot F is still **≈ 2.9× slower than the for-
 - **polar** — 53 scalar kernels, fully inlined by Numba into a single `inner_F` function body. One Python→Numba boundary crossing, zero sub-function calls at runtime.
 - **Mat_Mul** — 8 `SolCF.csc_matvec` calls inside `inner_F` + dispatch to 3 sub-functions (`inner_F0`, `inner_F1`, `inner_F2`) + the `inner_F` dispatcher itself. Numba can inline some but not all of these layers, so you pay ~100 ns per sub-function call on top of the matvec work.
 
-The 2 µs gap is usually invisible next to the J call (~55 µs) and the linear solve on anything non-trivial, but **if your workload is millions of pure F evaluations on a small network and you don't rebuild the module**, the for-loop form still wins on hot F.
+The 2 µs gap is usually invisible next to the J call (~36 µs) and the linear solve on anything non-trivial, but **if your workload is millions of pure F evaluations on a small network and you don't rebuild the module**, the for-loop form still wins on hot F.
 
-- **Module hot J** is ~1.0× — a tie after the fast path. (The `Mat_Mul` J uses the vectorised scatter-add in the {ref}`Matrix-Vector Calculus <matrix_calculus>` chapter and is independent of the hot F change.)
+- **Module hot J** is ~1.3× in `Mat_Mul`'s favour, 48 µs against 36 µs. It was a tie until Solverz 0.11.0 replaced the coordinate-to-compressed-column conversion inside every `J_` call with a gather into a pattern analysed once at import. (The `Mat_Mul` J uses the vectorised scatter-add in the {ref}`Matrix-Vector Calculus <matrix_calculus>` chapter and is independent of the hot F change.)
 - **Inline hot F/J** — without Numba, the for-loop form is slower across the board (~10× on F, ~3× on J) because lambdify has to walk 53 large scalar expressions + 361 Jacobian sub-expressions on every call. `Mat_Mul`'s 3 vector equations + scipy SpMVs finish in a fraction of the time.
 
 ### Which formulation should I use?
 
 **Use `Mat_Mul` when** *any* of the following hold:
 
-1. **You iterate on the model.** Compile-time savings are paid on every rebuild. A 47 s vs 2.7 s cold compile is the difference between a usable and an unusable interactive workflow.
+1. **You iterate on the model.** Compile-time savings are paid on every rebuild. A 49 s vs 2.8 s cold compile is the difference between a usable and an unusable interactive workflow.
 2. **The network is larger than a toy example.** For networks with more than ~60 unknowns the SpMV dispatch cost is amortised over more arithmetic and Mat_Mul's hot F catches up to or passes the for-loop form. At case118+ scale the 2.9× regression on case30 is already gone.
-3. **Your workload includes at least one Jacobian call per F call.** `J` dominates per-`J_(y, p)` call cost (~55 µs on case30 for both paths), so a 2 µs hot-F regression is invisible relative to one full F+J pair. This matches every power-flow workload (Newton-Raphson `nr_method`, SICNM) and the implicit-step inner loop of DHS quasi-dynamic energy-flow integrators — anything that needs a Jacobian per step.
+3. **Your workload includes at least one Jacobian call per F call.** `J` dominates per-`J_(y, p)` call cost, 36 to 48 µs on case30 depending on the path, so a 2 µs hot-F regression is invisible relative to one full F+J pair. This matches every power-flow workload (Newton-Raphson `nr_method`, SICNM) and the implicit-step inner loop of DHS quasi-dynamic energy-flow integrators — anything that needs a Jacobian per step.
 4. **You want compact, paper-faithful equations.** `Mat_Mul(G, e)` replaces `nb` scalar `Eqn`s and the matrix-calculus engine derives the Jacobian automatically.
 
 **Consider the for-loop form when all of these hold**:
@@ -237,7 +237,7 @@ This combination is narrow: in practice, ~every power-flow or DHS use case sees 
 
 #### Known performance regression on `case30`-scale networks
 
-On case30 (58 unknowns) the `Mat_Mul` hot F is **≈ 2.9× slower** than the for-loop form after the 0.8.1 fast path (≈ 3.2 µs vs ≈ 1.1 µs). The remaining gap is the structural cost of 8 `SolCF.csc_matvec` calls + 3 sub-function dispatches + the `inner_F` dispatcher, versus the for-loop form's single inlined `@njit` body of 53 scalar trig kernels.
+On case30 (58 unknowns) the `Mat_Mul` hot F is **≈ 2.3× slower** than the for-loop form (≈ 3.3 µs vs ≈ 1.4 µs). The remaining gap is the structural cost of 8 `SolCF.csc_matvec` calls + 3 sub-function dispatches + the `inner_F` dispatcher, versus the for-loop form's single inlined `@njit` body of 53 scalar trig kernels.
 
 The gap will shrink further if any of these optimisations land:
 
@@ -257,7 +257,7 @@ Every `Mat_Mul(A, v)` placeholder is classified at code-gen time. A placeholder 
 - `Mat_Mul(A, v)` where `A` is `Param(A, dim=2, sparse=False)` — dense 2-D parameter. This also fires a one-shot `UserWarning` at `FormJac` time. Workaround: wrap the matrix in `csc_array(...)` and declare `sparse=True`.
 
 ```{note}
-The cold-compile cost for the for-loop form (~47 s on M4) matches the "hundreds of seconds" figure quoted for the older Ryzen 5800H laptop earlier in this chapter. The *absolute* number is sensitive to CPU single-thread performance, but the **ratio** between the two formulations (≈17×) is driven almost entirely by the number of `@njit` kernels the code generator emits, which is a property of the formulation, not the hardware.
+The cold-compile cost for the for-loop form, roughly 49 s on the M4, is the same effect as the 122 s quoted earlier in this chapter, which is larger only because that model also renders Hessian-vector-product kernels. The *absolute* number is sensitive to CPU single-thread performance, but the **ratio** between the two formulations (≈17×) is driven almost entirely by the number of `@njit` kernels the code generator emits, which is a property of the formulation, not the hardware.
 ```
 
 ## Compact polar power flow with `LoopEqn`
@@ -297,45 +297,45 @@ python bench_pf_loopeqn_vs_polar.py
 
 ### Benchmark environment
 
-Measured on the same machine as the `Mat_Mul` comparison: 2025 MacBook Air, Apple M4, macOS 26.5, Python 3.11.13, `numpy==2.3.5`, `scipy==1.16.3`, `numba==0.65.0`, `sympy==1.13.3`, and Solverz 0.9.x (the LoopEqn release). Each per-call number is 10 warm-up calls followed by 2000 timed iterations; the cold-compile measurement runs in a fresh subprocess with `__pycache__` and Numba `.nbi`/`.nbc` caches wiped beforehand. The numbers below are representative medians of three consecutive runs.
+Measured on the same machine as the `Mat_Mul` comparison: 2025 MacBook Air, Apple M4, macOS 26.6.2, Python 3.11.13, `numpy==2.3.5`, `scipy==1.16.3`, `numba==0.65.0`, `sympy==1.13.3`, and Solverz 0.11.0. Each per-call number is 10 warm-up calls followed by 2000 timed iterations; the cold-compile measurement runs in a fresh subprocess with `__pycache__` and Numba `.nbi`/`.nbc` caches wiped beforehand. The numbers below are representative medians of three consecutive runs.
 
 | Phase                                            |    for-loop (polar) |     LoopEqn (polar) |  LoopEqn wins by |
 | :----------------------------------------------- | ------------------: | ------------------: | ---------------: |
-| **Modelling** — `Model() → create_instance()`    |            ≈ 1.4 s  |            ≈ 0.09 s |             ~15× |
-| **Compilation** — module render (`jit=True`)      |            ≈ 0.6 s  |           ≈ 0.014 s |             ~43× |
+| **Modelling** — `Model() → create_instance()`    |           ≈ 1.34 s  |           ≈ 0.094 s |             ~14× |
+| **Compilation** — module render (`jit=True`)      |           ≈ 0.62 s  |           ≈ 0.015 s |             ~43× |
 | **Compilation** — `@njit` kernels emitted         |               416  |                 12 |             ~35× |
-| **Compilation** — module cold import + JIT        |             ≈ 45 s  |            ≈ 2.5 s |             ~18× |
-| **Computation** — module hot **F** (per call)     |           ≈ 1.05 µs |           ≈ 2.35 µs | 0.45× *(loses)* |
-| **Computation** — module hot **J** (per call)     |             ≈ 55 µs |             ≈ 36 µs |             ~1.5× |
-| **Computation** — Newton-Raphson end-to-end       |            ≈ 0.33 ms |           ≈ 0.20 ms |             ~1.6× |
+| **Compilation** — module cold import + JIT        |             ≈ 49 s  |            ≈ 2.9 s |             ~17× |
+| **Computation** — module hot **F** (per call)     |           ≈ 1.28 µs |           ≈ 3.73 µs | 0.34× *(loses)* |
+| **Computation** — module hot **J** (per call)     |             ≈ 41 µs |             ≈ 23 µs |             ~1.8× |
+| **Computation** — Newton-Raphson end-to-end       |            ≈ 0.29 ms |           ≈ 0.16 ms |             ~1.8× |
 
 Shapes: the polar for-loop form has **53 unknowns / 53 scalar `Eqn`s** (`Va` at PV+PQ buses, `Vm` at PQ buses); the LoopEqn form has **60 unknowns / 4 equation families** — `Vm_full` and `Va_full` over all 30 buses, with P balance over PV+PQ, Q balance over PQ, and two pin families fixing the ref/pv voltages, for 60 scalar rows.
 
 ### Modelling cost
 
-`Model()` construction plus `create_instance()` is **~15× faster** with `LoopEqn` (≈ 0.09 s vs ≈ 1.4 s). The for-loop form materialises 53 fully-expanded scalar trigonometric expressions in Python, each a sum of up to `nb` terms, and `create_instance()` must traverse all of them to build the symbolic IR. The LoopEqn form carries 4 compact loop templates instead, so the symbolic layer never sees the unrolled expansion.
+`Model()` construction plus `create_instance()` is **~14× faster** with `LoopEqn` (≈ 0.094 s vs ≈ 1.34 s). The for-loop form materialises 53 fully-expanded scalar trigonometric expressions in Python, each a sum of up to `nb` terms, and `create_instance()` must traverse all of them to build the symbolic IR. The LoopEqn form carries 4 compact loop templates instead, so the symbolic layer never sees the unrolled expansion.
 
 ### Compilation cost
 
 This is the headline. `LoopEqn` emits **12** `@njit` kernels where the for-loop form emits **416**, and the cold compile, render, and model-build times all scale with that count:
 
-- **for-loop** — 1 dispatcher `inner_F` + **53** per-bus `inner_F{i}` + 1 dispatcher `inner_J` + **361** per-non-zero `inner_J{k}` = **416** Numba kernels. Each kernel is a cheap scalar expression, but the fixed per-kernel overhead (LLVM instantiation, symbol table, cache write) dominates the ~45 s cold compile.
-- **LoopEqn** — 1 dispatcher `inner_F` + **4** per-family loop kernels (`inner_F0..3`, one per `LoopEqn`) + 1 dispatcher `inner_J` delegating to **4** vectorised `_sz_loop_jac_kernel_N` kernels (each scatters one equation family into precomputed `_sz_loop_jac_row_N` / `_sz_loop_jac_col_N` index arrays) + **2** `_sz_csr_*_point` CSR-lookup helpers = **12** kernels. Cold compile (~2.5 s) is dominated by Numba startup, not per-kernel work.
+- **for-loop** — 1 dispatcher `inner_F` + **53** per-bus `inner_F{i}` + 1 dispatcher `inner_J` + **361** per-non-zero `inner_J{k}` = **416** Numba kernels. Each kernel is a cheap scalar expression, but the fixed per-kernel overhead (LLVM instantiation, symbol table, cache write) dominates the ~49 s cold compile.
+- **LoopEqn** — 1 dispatcher `inner_F` + **4** per-family loop kernels (`inner_F0..3`, one per `LoopEqn`) + 1 dispatcher `inner_J` delegating to **4** vectorised `_sz_loop_jac_kernel_N` kernels (each scatters one equation family into precomputed `_sz_loop_jac_row_N` / `_sz_loop_jac_col_N` index arrays) + **2** `_sz_csr_*_point` CSR-lookup helpers = **12** kernels. Cold compile (~2.9 s) is dominated by Numba startup, not per-kernel work.
 
 ### Computation cost
 
 At runtime, `LoopEqn` and `Mat_Mul` part ways:
 
-- **Hot F is ~2.2× slower** (≈ 2.35 µs vs ≈ 1.05 µs). The for-loop's 53 scalar `inner_F{i}` bodies are inlined by LLVM into one straight-line `inner_F` — a single Python→Numba crossing with no data-dependent indexing. The LoopEqn `inner_F` runs 4 loop kernels whose inner `Sum` walks the CSR row of bus `h` (`_sz_csr_Gbus_indptr[h] : _sz_csr_Gbus_indptr[h+1]`); the gather indirection plus loop overhead costs the extra ~1.3 µs on `case30`. This is the same structural regression `Mat_Mul` pays on small networks.
-- **Hot J is ~1.5× faster** (≈ 36 µs vs ≈ 55 µs) — the opposite of hot F. The for-loop form dispatches **361 tiny per-non-zero kernels**, each computing one Jacobian entry and paying its own call overhead; LoopEqn assembles the whole Jacobian through **4** vectorised `_sz_loop_jac_kernel_N` kernels, one per equation family. Far fewer, larger kernels win once per-call dispatch dominates, which it does for a several-hundred-entry sparse Jacobian.
-- **Newton-Raphson end-to-end is ~1.6× faster** (≈ 0.20 ms vs ≈ 0.33 ms). Each Newton step is one F + one J + one sparse solve, and J dominates the per-step cost, so the faster J carries the iteration. The step counts differ slightly (2 for LoopEqn, 3 for the for-loop) because the perturbed flat start is parameterised over the full vs the reduced state, so this end-to-end number is indicative rather than a strictly equi-perturbed comparison.
+- **Hot F is ~2.9× slower** (≈ 3.73 µs vs ≈ 1.28 µs). The for-loop's 53 scalar `inner_F{i}` bodies are inlined by LLVM into one straight-line `inner_F` — a single Python→Numba crossing with no data-dependent indexing. The LoopEqn `inner_F` runs 4 loop kernels whose inner `Sum` walks the CSR row of bus `h` (`_sz_csr_Gbus_indptr[h] : _sz_csr_Gbus_indptr[h+1]`); the gather indirection plus loop overhead costs the extra ~2.5 µs on `case30`. Solverz 0.11.0 widened this gap: the walker arrays now reach the compiled kernels as arguments rather than as frozen module globals, which is what lets Numba cache them, and the argument passing costs a little on every call. This is the same structural regression `Mat_Mul` pays on small networks.
+- **Hot J is ~1.8× faster** (≈ 23 µs vs ≈ 41 µs) — the opposite of hot F. The for-loop form dispatches **361 tiny per-non-zero kernels**, each computing one Jacobian entry and paying its own call overhead; LoopEqn assembles the whole Jacobian through **4** vectorised `_sz_loop_jac_kernel_N` kernels, one per equation family. Far fewer, larger kernels win once per-call dispatch dominates, which it does for a several-hundred-entry sparse Jacobian.
+- **Newton-Raphson end-to-end is ~1.8× faster** (≈ 0.16 ms vs ≈ 0.29 ms). Each Newton step is one F + one J + one sparse solve, and J dominates the per-step cost, so the faster J carries the iteration. The step counts differ slightly (2 for LoopEqn, 3 for the for-loop) because the perturbed flat start is parameterised over the full vs the reduced state, so this end-to-end number is indicative rather than a strictly equi-perturbed comparison.
 
 ### Which formulation should I use?
 
 `LoopEqn` is the better default for polar power flow whenever you iterate on the model or solve with a Newton method:
 
 1. **You want to stay in polar coordinates.** Unlike `Mat_Mul`, which requires the rectangular $e$/$f$ rewrite, `LoopEqn` keeps the trigonometric formula the textbook uses, so the code reads like the math.
-2. **You rebuild the module.** The ~18× cold-compile and ~43× render savings are paid on every rebuild — the difference between an interactive and an unusable edit loop.
+2. **You rebuild the module.** The ~17× cold-compile and ~43× render savings are paid on every rebuild — the difference between an interactive and an unusable edit loop.
 3. **Your loop calls a Jacobian** (every Newton/NR solve does). The faster J and faster end-to-end NR make `LoopEqn` at least as fast as the for-loop at solve time on `case30`, with the compile-time savings on top.
 
 The one workload where the for-loop form still wins is a hot loop of **pure F evaluations** (no Jacobian) on a small network with the module compiled once and reused for millions of calls — the same narrow case as the `Mat_Mul` regression above.
