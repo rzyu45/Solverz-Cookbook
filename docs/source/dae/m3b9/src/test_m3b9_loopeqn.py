@@ -18,12 +18,19 @@ F still updated correctly via ``get_v_t(t)``, but J froze — and
 Rodas's modified-Newton iterations integrated the fault transient
 with the un-faulted Jacobian, producing the silent
 "Step rejected over 100 times" abort at the fault inception that
-this test guards against.
+this test guards against. At the tolerance used below, Rodas no
+longer aborts on such a Jacobian: it integrates the fault with
+2.1 million steps in 751 s instead of 1177 steps in 0.8 s. The
+Jacobian is therefore checked directly, at a time inside the
+fault, before the model is integrated.
 
-The asserted-against benchmarks are the scalar ``test_m3b9``
-trajectories. The LoopEqn and scalar formulations are
-algebraically identical, so the integrated trajectories must
-agree to the solver-tolerance noise floor.
+The benchmarks are the scalar model of ``test_m3b9`` integrated at
+rtol 1e-10 by ``make_m3b9_bench.py``. The LoopEqn and scalar
+formulations are algebraically identical. This test integrates at
+rtol 1e-6, whose error against the benchmarks is at most 9e-7, an
+order of magnitude inside the comparison tolerance of 1e-5, so a
+platform or a linear solver that changes the step sequence still
+passes.
 """
 import numpy as np
 import pandas as pd
@@ -62,6 +69,34 @@ def _mdl_from_module(spf, y0, jit: bool = True):
     sys.path.insert(0, d)
     mod = importlib.import_module(mod_name)
     return mod.mdl, mod.y
+
+
+#: As in test_m3b9.py.
+OPT = dict(hinit=1e-5, rtol=1e-6, atol=1e-8)
+TSPAN = np.linspace(0, 10, 1001)
+#: A time inside the fault, which lasts from 0.002 s to 0.03 s.
+T_FAULT = 0.01
+
+
+def assert_jacobian_matches_residual(dae, y, t):
+    """``J(t)`` against a central difference of ``F(t)``.
+
+    At ``T_FAULT`` the Jacobian must carry the faulted ``G_shunt``, the
+    defect described in the module docstring.
+    """
+    y = np.asarray(y, dtype=float)
+    J = dae.J(t, y, dae.p)
+    J = J.toarray() if hasattr(J, 'toarray') else np.asarray(J)
+    J_fd = np.empty_like(J)
+    for k in range(y.size):
+        h = 1e-6 * max(1.0, abs(y[k]))
+        yp, ym = y.copy(), y.copy()
+        yp[k] += h
+        ym[k] -= h
+        # np.array copies: a module rendered by an older Solverz returns the
+        # same array from every call
+        J_fd[:, k] = (np.array(dae.F(t, yp, dae.p)) - np.array(dae.F(t, ym, dae.p))) / (2 * h)
+    np.testing.assert_allclose(J, J_fd, rtol=1e-6, atol=1e-4)
 
 
 def test_m3b9_loopeqn(datadir):
@@ -177,25 +212,12 @@ def test_m3b9_loopeqn(datadir):
 
     m3b9, y0 = m.create_instance()
     mdl, y = _mdl_from_module(m3b9, y0, jit=True)
+    assert_jacobian_matches_residual(mdl, y.array, T_FAULT)
 
-    sol = Rodas(mdl, np.linspace(0, 10, 1001), y, Opt(hinit=1e-5))
+    sol = Rodas(mdl, TSPAN, y, Opt(**OPT))
 
-    # Compare against the scalar-test benchmarks. The two
-    # formulations are algebraically identical (same physics, same
-    # equations rearranged into LoopEqn templates), so the
-    # trajectories must agree to scalar-test tolerances.
-    with open(datadir / 'delta_bench.npy', 'rb') as f:
-        delta_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['delta'], delta_bench, rtol=1e-4, atol=1e-5)
-
-    with open(datadir / 'omega_bench.npy', 'rb') as f:
-        omega_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['omega'], omega_bench, rtol=1e-4, atol=1e-5)
-
-    with open(datadir / 'Ux_bench.npy', 'rb') as f:
-        Ux_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['Ux'], Ux_bench, rtol=1e-4, atol=1e-5)
-
-    with open(datadir / 'Uy_bench.npy', 'rb') as f:
-        Uy_bench = np.load(f)
-    np.testing.assert_allclose(sol.Y['Uy'], Uy_bench, rtol=1e-2, atol=1e-3)
+    # Compare against the benchmarks, see the module docstring.
+    for name in ('delta', 'omega', 'Ux', 'Uy'):
+        with open(datadir / f'{name}_bench.npy', 'rb') as f:
+            bench = np.load(f)
+        np.testing.assert_allclose(sol.Y[name], bench, rtol=1e-4, atol=1e-5)
