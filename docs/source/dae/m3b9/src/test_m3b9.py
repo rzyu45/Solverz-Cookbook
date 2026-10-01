@@ -4,9 +4,22 @@ import matplotlib.pyplot as plt
 
 from Solverz import Eqn, Ode, Var, Param, sin, cos, Rodas, Opt, TimeSeriesParam, made_numerical, Model
 
+#: The benchmarks are the scalar model integrated at rtol 1e-10 by
+#: ``make_m3b9_bench.py``. The test integrates at rtol 1e-6, whose error
+#: against them is at most 9e-7 on every quantity, an order of magnitude
+#: inside the comparison tolerance of 1e-5. A platform, a package version or a
+#: linear solver that changes the step sequence therefore still passes. At the
+#: default rtol of 1e-3 the error reaches 4.6e-5, beyond that tolerance, and a
+#: run passed only by repeating the step sequence of the run that wrote the
+#: benchmark.
+OPT = dict(hinit=1e-5, rtol=1e-6, atol=1e-8)
+TSPAN = np.linspace(0, 10, 1001)
+#: A time inside the fault, which lasts from 0.002 s to 0.03 s.
+T_FAULT = 0.01
 
-# %% test
-def test_m3b9(datadir):
+
+def build_m3b9(datadir):
+    """The m3b9 model with the G66 short-circuit fault, and its initial values."""
     # %% modelling
     m = Model()
     m.omega = Var('omega', [1, 1, 1])
@@ -79,36 +92,46 @@ def test_m3b9(datadir):
             rhs2 = rhs2 - getGitem(i, j) * m.Uy[j] - B[i, j] * m.Ux[j]
         m.__dict__[f'Iy_inj_{i}'] = Eqn(f'Iy injection {i}', rhs2)
 
-    m3b9, y0 = m.create_instance()
+    return m.create_instance()
+
+
+def assert_jacobian_matches_residual(dae, y, t):
+    """``J(t)`` against a central difference of ``F(t)``.
+
+    At ``T_FAULT`` the Jacobian must carry the faulted G66. A Jacobian that
+    keeps the pre-fault value is not caught by the trajectories at the
+    tolerance of ``OPT``: Rodas then integrates with millions of tiny steps
+    instead of failing, so it is checked here directly.
+    """
+    y = np.asarray(y, dtype=float)
+    J = dae.J(t, y, dae.p)
+    J = J.toarray() if hasattr(J, 'toarray') else np.asarray(J)
+    J_fd = np.empty_like(J)
+    for k in range(y.size):
+        h = 1e-6 * max(1.0, abs(y[k]))
+        yp, ym = y.copy(), y.copy()
+        yp[k] += h
+        ym[k] -= h
+        # np.array copies: a module rendered by an older Solverz returns the
+        # same array from every call
+        J_fd[:, k] = (np.array(dae.F(t, yp, dae.p)) - np.array(dae.F(t, ym, dae.p))) / (2 * h)
+    np.testing.assert_allclose(J, J_fd, rtol=1e-6, atol=1e-4)
+
+
+# %% test
+def test_m3b9(datadir):
+    m3b9, y0 = build_m3b9(datadir)
 
     m3b9_dae_sp, code = made_numerical(m3b9, y0, sparse=True, output_code=True)
     m3b9_dae_den, code = made_numerical(m3b9, y0, sparse=False, output_code=True)
+    assert_jacobian_matches_residual(m3b9_dae_sp, y0.array, T_FAULT)
+    assert_jacobian_matches_residual(m3b9_dae_den, y0.array, T_FAULT)
     # %% solution
-    sol_sp = Rodas(m3b9_dae_sp,
-                   np.linspace(0, 10, 1001),
-                   y0,
-                   Opt(hinit=1e-5))
-    sol_den = Rodas(m3b9_dae_den,
-                    np.linspace(0, 10, 1001),
-                    y0,
-                    Opt(hinit=1e-5))
+    sol_sp = Rodas(m3b9_dae_sp, TSPAN, y0, Opt(**OPT))
+    sol_den = Rodas(m3b9_dae_den, TSPAN, y0, Opt(**OPT))
     # %% run tests
-    with open(datadir/'delta_bench.npy', 'rb') as f:
-        delta_bench = np.load(f)
-    np.testing.assert_allclose(sol_sp.Y['delta'], delta_bench, rtol=1e-4, atol=1e-5)
-    np.testing.assert_allclose(sol_den.Y['delta'], delta_bench, rtol=1e-4, atol=1e-5)
-
-    with open(datadir/'omega_bench.npy', 'rb') as f:
-        omega_bench = np.load(f)
-    np.testing.assert_allclose(sol_sp.Y['omega'], omega_bench, rtol=1e-4, atol=1e-5)
-    np.testing.assert_allclose(sol_den.Y['omega'], omega_bench, rtol=1e-4, atol=1e-5)
-
-    with open(datadir/'Ux_bench.npy', 'rb') as f:
-        Ux_bench = np.load(f)
-    np.testing.assert_allclose(sol_sp.Y['Ux'], Ux_bench, rtol=1e-4, atol=1e-5)
-    np.testing.assert_allclose(sol_den.Y['Ux'], Ux_bench, rtol=1e-4, atol=1e-5)
-
-    with open(datadir/'Uy_bench.npy', 'rb') as f:
-        Uy_bench = np.load(f)
-    np.testing.assert_allclose(sol_sp.Y['Uy'], Uy_bench, rtol=1e-2, atol=1e-4)
-    np.testing.assert_allclose(sol_den.Y['Uy'], Uy_bench, rtol=1e-2, atol=1e-3)
+    for name in ('delta', 'omega', 'Ux', 'Uy'):
+        with open(datadir/f'{name}_bench.npy', 'rb') as f:
+            bench = np.load(f)
+        np.testing.assert_allclose(sol_sp.Y[name], bench, rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(sol_den.Y[name], bench, rtol=1e-4, atol=1e-5)
